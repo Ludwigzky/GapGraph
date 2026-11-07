@@ -818,6 +818,9 @@ input.blank {
 }
 
 .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+/* 交卷前的提醒：还没选把握程度 */
+.conf-need { color: #9a4b0a; margin: 0 8px 0 0; white-space: nowrap; }
+button[disabled].primary { opacity: 0.45; cursor: not-allowed; }
 
 /* 摸底：引导卡 + 进度条 */
 .card.intro { border-color: #cfe0ff; background: #f6f9ff; }

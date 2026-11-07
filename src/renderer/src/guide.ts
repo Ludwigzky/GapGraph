@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.8.0'
+export const GUIDE_VERSION = '1.8.1'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,14 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.8.1',
+    date: '2026-11-07',
+    items: [
+      '交卷前必须选「我很确定 / 不确定」：选之前提交按钮是灰的，并提示「先选一下把握程度」。',
+      '这两项是分开的——先选答案、再选把握程度，按钮才会亮。'
+    ]
+  },
   {
     version: '1.8.0',
     date: '2026-11-07',

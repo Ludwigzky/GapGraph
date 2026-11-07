@@ -2030,8 +2030,15 @@ function renderModal(): void {
                  <button class="small" data-conf="unsure" aria-pressed="${session.confidence === 'unsure'}">不确定</button>
                </div>
                <div class="spacer"></div>
+               ${
+                 session.answer && !session.confidence
+                   ? `<span class="hint conf-need">先选一下把握程度</span>`
+                   : ''
+               }
                <button class="ghost small" id="later">${session.diag ? '退出摸底' : '稍后'}</button>
-               <button class="primary" id="submit" ${session.answer ? '' : 'disabled'}>提交</button>`
+               <button class="primary" id="submit" ${
+                 session.answer && session.confidence ? '' : 'disabled'
+               } title="${session.answer ? (session.confidence ? '提交' : '先选我很确定 / 不确定') : '先作答'}">提交</button>`
         }
       </div>
     </div>`
@@ -2117,6 +2124,11 @@ function renderModal(): void {
 /** 先判对错（不改状态）：答错了先问一句"错在哪"，再落库 */
 async function doSubmit(): Promise<void> {
   if (!session || session.phase !== 'answering') return
+  // 必须自己表过态才能交卷：把握程度是"确定但答错"判定的唯一依据
+  if (!session.confidence) {
+    renderModal()
+    return
+  }
   const q = questions.find((x) => x.id === session!.ids[session!.index])!
   const { correct } = await api.check(q.id, session.answer)
   if (correct) {
