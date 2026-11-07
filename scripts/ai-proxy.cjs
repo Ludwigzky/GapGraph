@@ -151,7 +151,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/health') {
-    json(res, 200, { ok: true, model: MODEL, routes: ['chat', 'pack', 'questions'], pid: process.pid })
+    json(res, 200, { ok: true, model: MODEL, routes: ['chat', 'pack', 'questions', 'explain'], pid: process.pid })
     return
   }
 
@@ -184,7 +184,7 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
-  if (req.method !== 'POST' || !['/chat', '/pack', '/questions'].includes(req.url)) {
+  if (req.method !== 'POST' || !['/chat', '/pack', '/questions', '/explain'].includes(req.url)) {
     json(res, 404, { error: 'not found' })
     return
   }
@@ -415,6 +415,81 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { nodeName, questions: keep, raw: raw.length, reject, ms: Date.now() - t0, tokens })
     } catch (e) {
       json(res, 502, { error: `出题失败：${e.message || e}` })
+    }
+    return
+  }
+
+  /* ---------- 详细讲解：按「定义+基础认知 / 涉及的考法 / 知识点」三段展开 ---------- */
+  if (req.url === '/explain') {
+    try {
+      const body = await readBody(req)
+      const nodeName = String(body.nodeName || '').slice(0, 60)
+      const nodePath = String(body.nodePath || '').slice(0, 120)
+      const brief = String(body.brief || '').slice(0, 300)
+      const exam = String(body.exam || '').slice(0, 30)
+      const subject = String(body.subject || '').slice(0, 30)
+      const chapter = String(body.chapter || '').slice(0, 60)
+      if (!nodeName) {
+        json(res, 400, { error: '缺少 nodeName' })
+        return
+      }
+
+      const who = [exam, subject].filter(Boolean).join(' ') || '高中'
+      const t0 = Date.now()
+      const data = await upstreamRetry(
+        {
+          model: MODEL,
+          temperature: 0.5,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content: `你是${who}老师，正在给一个学生写某个考点的**详细讲解**。只输出 JSON。
+要求：
+- 讲透，不要泛泛而谈；每一句都要有信息量，不要复述题干
+- 用学生能直接用的语言，必要处给具体条件、公式、判别步骤
+- 涉及考法时要写清"以什么形式出现、怎么下手"，不要只写"常考"
+- 没有把握的具体数据（教材页码、历年考频、真题年份）一律不要写
+- 不要写"根据考纲""据统计"这类我们无法验证的说法`
+            },
+            {
+              role: 'user',
+              content: `章节：${chapter || '（未提供）'}
+考点：${nodeName}（${nodePath || '无路径'}）
+一句话简述：${brief || '（无）'}
+
+按下面三段展开，JSON 结构：
+{
+  "definition": "定义与基础认知，150-260 字。讲清它是什么、边界在哪、和相邻概念怎么区分",
+  "basics": ["基础认知要点，4-6 条，每条 20-40 字"],
+  "exams": ["涉及的考法，4-6 条，每条写清"以什么形式考 + 第一步怎么做""],
+  "keypoints": ["必须记住的知识点/结论/易错，4-6 条，每条 15-35 字"]
+}`
+            }
+          ]
+        },
+        30000
+      )
+      const content = data.choices?.[0]?.message?.content ?? '{}'
+      let parsed
+      try {
+        parsed = JSON.parse(content)
+      } catch {
+        parsed = { definition: String(content).slice(0, 900), basics: [], exams: [], keypoints: [] }
+      }
+      const arr = (v, max = 6) =>
+        (Array.isArray(v) ? v : []).map((x) => String(x).trim()).filter(Boolean).slice(0, max)
+
+      json(res, 200, {
+        definition: String(parsed.definition || '').slice(0, 1200),
+        basics: arr(parsed.basics),
+        exams: arr(parsed.exams),
+        keypoints: arr(parsed.keypoints),
+        ms: Date.now() - t0,
+        tokens: (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0)
+      })
+    } catch (e) {
+      json(res, 502, { error: `生成讲解失败：${e.message || e}` })
     }
     return
   }

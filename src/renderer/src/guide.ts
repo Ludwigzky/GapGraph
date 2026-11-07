@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.11.0'
+export const GUIDE_VERSION = '1.12.0'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,16 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.12.0',
+    date: '2026-11-07',
+    items: [
+      '右栏每个考点的「讲解」多了一个「展开详细版」按钮：点一下当场生成，按三段展开——定义与基础认知、涉及的考法、知识点。',
+      '详细版是分开写的：定义讲边界和相邻概念怎么区分；考法写清"以什么形式出现、第一步怎么做"；知识点给结论和易错。',
+      '生成一次就会记住（按板块存），下次点开同一个考点直接显示，不用再花钱重生成；想换一版点「重新生成详细版」。',
+      '详细版底下会标注生成时间，并提醒它是 AI 现写的、可能有错——拿不准就在下面直接追问。'
+    ]
+  },
   {
     version: '1.11.0',
     date: '2026-11-07',

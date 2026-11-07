@@ -16,7 +16,8 @@ import { BANDS, buildHeatmap, summarizeHeat } from '../../main/domain/heatmap'
 import { attributionLine, reasonsFor } from '../../main/domain/attribution'
 import aiJson from '../../../resources/ai/gaokao-math-function.json'
 import { addCard, isSaved, loadCards, removeCard } from './cards'
-import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
+import { askAi, endpointStatus, explainNode, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
+import { explainOf, saveExplain } from './explain'
 import { addToBank } from './qbank'
 import { addUserNode, clearPositions, loadPositions, removeUserNode, saveOnePosition } from './edits'
 import { PHYSICS_SLIDERS, loadPhysics, resetPhysics, savePhysics } from './physics'
@@ -37,6 +38,8 @@ import { normalizeGeneratedPack } from '../../main/domain/pack'
 
 /** 实时提问的状态（只保留当前节点的） */
 let askState: { nodeId: string; loading: boolean; answer?: AiAnswer; error?: string } | null = null
+/** 详细讲解的生成状态（按节点，切走再切回来不会互相干扰） */
+let explainState: { nodeId: string; loading: boolean; error?: string } | null = null
 
 /** 正在为哪个考点准备题目（避免重复请求） */
 const preparing = new Set<string>()
@@ -1168,6 +1171,11 @@ function renderPanel(): void {
   // 没有题时，能不能现场出题决定按钮是"可点"还是"灰掉"
   const aiReady = endpointStatus()
   const canGen = aiReady.reachable && aiReady.supportsQuestions
+  // 详细讲解：先读缓存，再看是否正在为这个节点生成
+  const detail = explainOf(pack.packId, n.id)
+  const exSt = explainState && explainState.nodeId === n.id ? explainState : null
+  const explainLoading = !!exSt?.loading
+  const explainError = exSt?.error ?? ''
 
   box.innerHTML = `
     <div class="pname-row">
@@ -1188,8 +1196,49 @@ function renderPanel(): void {
     <div class="hint">做过 ${m.n} 题 · 对 ${m.nok} 题 · ${weightNote(n)}${m.misconception ? ' · 存在固化错误概念' : ''}</div>
 
     <div class="block">
-      <h3>讲解</h3>
+      <h3>讲解
+        <button class="ghost small explain-btn" id="explain-more" ${explainLoading ? 'disabled' : ''}>
+          ${explainLoading ? '生成中…' : detail ? '重新生成详细版' : '展开详细版'}
+        </button>
+      </h3>
       <p>${esc((AI_CONTENT.byNode[n.id]?.explain ?? n.brief) ?? '（暂无讲解）')}</p>
+      ${
+        explainError
+          ? `<div class="hint" style="color:#a52222">${esc(explainError)}</div>`
+          : ''
+      }
+      ${
+        detail
+          ? `<div class="xdetail">
+               <div class="xsec">
+                 <div class="xhead">定义与基础认知</div>
+                 <p class="xtext">${esc(detail.definition)}</p>
+                 ${
+                   detail.basics.length
+                     ? `<ul class="xlist">${detail.basics.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>`
+                     : ''
+                 }
+               </div>
+               ${
+                 detail.exams.length
+                   ? `<div class="xsec">
+                        <div class="xhead">涉及的考法</div>
+                        <ul class="xlist">${detail.exams.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
+                      </div>`
+                   : ''
+               }
+               ${
+                 detail.keypoints.length
+                   ? `<div class="xsec">
+                        <div class="xhead">知识点</div>
+                        <ul class="xlist">${detail.keypoints.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
+                      </div>`
+                   : ''
+               }
+               <div class="hint">生成于 ${new Date(detail.at).toLocaleString('zh-CN')} · 由 AI 现写，可能有错，拿不准就在下面追问</div>
+             </div>`
+          : ''
+      }
     </div>
 
     ${(() => {
@@ -1383,6 +1432,38 @@ function renderPanel(): void {
       })
     })
   }
+  /* 详细讲解：当场生成并把结果按板块缓存下来 */
+  box.querySelector('#explain-more')?.addEventListener('click', async () => {
+    if (!aiReady.reachable) {
+      explainState = { nodeId: n.id, loading: false, error: 'AI 服务没连上，先运行 node scripts/ai-proxy.cjs' }
+      renderPanel()
+      return
+    }
+    explainState = { nodeId: n.id, loading: true }
+    renderPanel()
+    try {
+      const res = await explainNode({
+        nodeName: n.name,
+        nodePath: pathOf(n.id),
+        brief: n.brief ?? '',
+        exam: pack.meta?.exam ?? '',
+        subject: pack.meta?.subject ?? pack.subject ?? '',
+        chapter: n.origin ?? pack.meta?.chapter ?? pack.title ?? ''
+      })
+      if (!res) {
+        explainState = { nodeId: n.id, loading: false, error: 'AI 服务没连上' }
+      } else if (!res.definition && !res.basics.length && !res.exams.length && !res.keypoints.length) {
+        explainState = { nodeId: n.id, loading: false, error: 'AI 这次没返回内容，稍后再试一次' }
+      } else {
+        saveExplain(pack.packId, n.id, res)
+        explainState = { nodeId: n.id, loading: false }
+      }
+    } catch (e) {
+      explainState = { nodeId: n.id, loading: false, error: `生成失败：${(e as Error).message}` }
+    }
+    renderPanel()
+  })
+
   box.querySelectorAll<HTMLElement>('#rate .chip').forEach((c) => {
     c.addEventListener('click', async () => {
       const level = Number(c.dataset.level) as 0 | 1 | 2

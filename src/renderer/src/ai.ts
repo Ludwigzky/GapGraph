@@ -56,13 +56,21 @@ export function getEndpoint(): string {
   return readStored()
 }
 
-export function endpointStatus(): { endpoint: string; reachable: boolean; supportsPack: boolean; supportsChat: boolean; supportsQuestions: boolean } {
+export function endpointStatus(): {
+  endpoint: string
+  reachable: boolean
+  supportsPack: boolean
+  supportsChat: boolean
+  supportsQuestions: boolean
+  supportsExplain: boolean
+} {
   return {
     endpoint: getEndpoint(),
     reachable,
     supportsPack: routes.includes('pack'),
     supportsChat: routes.includes('chat'),
-    supportsQuestions: routes.includes('questions')
+    supportsQuestions: routes.includes('questions'),
+    supportsExplain: routes.includes('explain')
   }
 }
 
@@ -199,6 +207,63 @@ export async function askAi(payload: AskPayload): Promise<AiAnswer | null> {
     }
     const data = (await res.json()) as AiAnswer
     return { answer: String(data.answer ?? ''), cards: Array.isArray(data.cards) ? data.cards : [], ms: Number(data.ms) || 0 }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/* ---------------- 详细讲解 ---------------- */
+
+export interface ExplainPayload {
+  nodeName: string
+  nodePath: string
+  brief: string
+  exam?: string
+  subject?: string
+  chapter?: string
+}
+
+export interface DetailedExplain {
+  definition: string
+  basics: string[]
+  exams: string[]
+  keypoints: string[]
+  ms: number
+  at: number
+}
+
+/**
+ * 当场生成某个考点的详细讲解。
+ * 返回 null = 代理没配；抛错 = 配了但失败（调用方要给出可读提示）。
+ */
+export async function explainNode(payload: ExplainPayload): Promise<DetailedExplain | null> {
+  const endpoint = getEndpoint()
+  if (!endpoint) return null
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 40000)
+  try {
+    const res = await fetch(`${endpoint}/explain`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`代理返回 ${res.status} ${detail.slice(0, 80)}`)
+    }
+    const d = (await res.json()) as Partial<DetailedExplain>
+    const list = (v: unknown): string[] =>
+      (Array.isArray(v) ? v : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 6)
+    return {
+      definition: String(d.definition ?? '').slice(0, 1400),
+      basics: list(d.basics),
+      exams: list(d.exams),
+      keypoints: list(d.keypoints),
+      ms: Number(d.ms) || 0,
+      at: Date.now()
+    }
   } finally {
     clearTimeout(timer)
   }
