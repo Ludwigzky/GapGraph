@@ -65,13 +65,17 @@ export interface Question {
 export interface Mastery {
   /** 覆盖：0 没学过 / 0.5 学过不会 / 1 会 */
   K: number
-  /** 能力：难度加权正确率（EWMA） */
+  /** 能力：难度加权、时间衰减后的正确率估计（A = Aw / W） */
   A: number
   /** 稳定性（天），用于遗忘曲线 */
   s: number
   /** 累计作答（仅计入"有效证据"的次数） */
   n: number
   nok: number
+  /** 时间衰减后的权重和 = 有效样本量，用于置信度 */
+  W: number
+  /** 时间衰减后的加权正确和，A = Aw / W */
+  Aw: number
   /** 错误概念已固化 */
   misconception: 0 | 1
   lastAt: number | null

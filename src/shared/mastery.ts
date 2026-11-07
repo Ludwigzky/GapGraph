@@ -5,8 +5,18 @@ export const DAY = 86_400_000
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
 
 export function freshMastery(K = 0): Mastery {
-  return { K, A: 0.3, s: 1, n: 0, nok: 0, misconception: 0, lastAt: null }
+  return { K, A: 0.3, s: 1, n: 0, nok: 0, W: 0, Aw: 0, misconception: 0, lastAt: null }
 }
+
+/** 证据的半衰期：21 天。超过这个尺度，旧作答的影响开始明显变淡 */
+export const EVIDENCE_TAU_DAYS = 21
+
+/**
+ * 按次数的衰减：同一天里刷 100 题，光靠"时间"分不出第 1 题和第 100 题，
+ * 会让当天的一次爆发式进步被平均掉。每做一题把旧证据乘一次 0.93，
+ * 等效记忆约 14 题 —— 比旧模型（约 3 题）稳，又比纯时间衰减灵敏。
+ */
+export const EVIDENCE_ATTEMPT_DECAY = 0.93
 
 export function retention(m: Mastery, now: number): number {
   if (!m.lastAt) return 1
@@ -41,9 +51,42 @@ export function masteryScore(m: Mastery, now: number): number {
   return 1 - Math.exp(-n / 4)
 }
 
+/**
+ * 取累加器：老存档 / 测试里手写的 Mastery 只有 n/nok，没有 W/Aw。
+ * 缺了就按 n/nok 回填，等价于"这些证据都还算新鲜"，
+ * 否则会被当成零证据，掌握度和置信度一起塌到地板上。
+ */
+function accum(m: Mastery): { W: number; Aw: number } {
+  const W = typeof m.W === 'number' ? m.W : NaN
+  const Aw = typeof m.Aw === 'number' ? m.Aw : NaN
+  if (Number.isFinite(W) && Number.isFinite(Aw) && W > 0) return { W, Aw }
+  const n = Math.max(0, m.n ?? 0)
+  const nok = Math.max(0, m.nok ?? 0)
+  return { W: n, Aw: Math.min(n, nok) }
+}
+
+/**
+ * 有效证据量：时间衰减后的权重和。
+ *
+ * 和"做过多少题"不是一回事——几天不练就说明证据在变旧，
+ * 哪怕历史累计做过 100 题，也不该还挂着 99% 的置信度。
+ */
+export function evidenceW(m: Mastery, now: number): number {
+  const { W } = accum(m)
+  if (!m.lastAt || W <= 0) return W
+  const days = Math.max(0, (now - m.lastAt) / DAY)
+  return W * Math.exp(-days / EVIDENCE_TAU_DAYS)
+}
+
+export function evidConfidence(m: Mastery, now: number): number {
+  return confidence(evidenceW(m, now))
+}
+
 export function effective(m: Mastery, now: number): { M: number; conf: number; eff: number } {
   const M = masteryScore(m, now)
-  const conf = confidence(m.n)
+  // 置信度改用"有效证据量"：久不练习会让它自己回落，
+  // 而不是像以前那样做满 20 题就永久 0.99。
+  const conf = evidConfidence(m, now)
   return { M, conf, eff: conf * M + (1 - conf) * 0.3 }
 }
 
@@ -89,13 +132,40 @@ export function applyAttempt(m: Mastery, e: AttemptEffect): Mastery {
   const days = m.lastAt ? (e.now - m.lastAt) / DAY : 0
   const R = Math.exp(-Math.max(0, days) / Math.max(m.s, 0.5))
   const wDiff = 0.6 + 0.4 * ((e.difficulty - 1) / 4)
-  const wRec = Math.exp(-Math.max(0, days) / 14)
-  const obs = (e.correct ? 1 : 0) * wDiff
-
   const penalty = e.correct ? 1 : (PENALTY[e.errorReason ?? ''] ?? 0.8)
-  const alpha = 0.35 * clamp01(e.weight) * penalty
 
-  const A = clamp01(m.A + alpha * wRec * (obs - m.A))
+  /**
+   * 能力值 A 改成"带绝对时间衰减的加权估计"。
+   *
+   * 旧做法是固定步长的滑动平均（A += 0.35·(obs−A)），两个毛病：
+   *   ① 等效记忆只有约 3 题，一次手滑就掉三成，分数剧烈摆动
+   *   ② 衰减看的是"距上次作答多久"，一天内连刷 100 题时全部权重相等，
+   *      3 个月前那批错题和刚才的错题一样重
+   *
+   * 现在每次先把累加器按真实时间衰减，再叠加本次证据：
+   *   W  = W·e^(−Δ/τ) + w      权重和（也就是有效样本量）
+   *   Aw = Aw·e^(−Δ/τ) + w·答对  加权正确和
+   *   A  = Aw / W
+   * 于是"很久以前错的"会被稀释，"最近对的"占主导，
+   * 而停止练习后 W 自己也会衰减，置信度跟着回落。
+   */
+  // 两种衰减叠加：时间（跨天变旧）+ 次数（同一天内也被后面的题压过去）
+  const decay = Math.exp(-Math.max(0, days) / EVIDENCE_TAU_DAYS) * EVIDENCE_ATTEMPT_DECAY
+  const w = wDiff * penalty
+
+  /**
+   * 先验：把"作答之前的 A"当成 1 个伪计数。
+   * 没有它的话，第一次作答就会把 A 直接算成 0 或 1（Aw/W = 0/w），
+   * 之前的自评、以及"一次失误不等于全盘不会"这件事全丢了。
+   */
+  const base = accum(m)
+  const baseW = base.W > 0 ? base.W : 1
+  const baseAw = base.W > 0 ? base.Aw : m.A
+
+  const W = baseW * decay + w
+  const Aw = baseAw * decay + w * (e.correct ? 1 : 0)
+  const A = W > 0 ? clamp01(Aw / W) : m.A
+
   const slip = !e.correct && !!SLIP[e.errorReason ?? '']
   const s = e.correct ? m.s * (1 + 1.2 * (1 - R) * wDiff) : slip ? Math.max(1, m.s * 0.85) : Math.max(1, m.s * 0.45)
   const misconception: 0 | 1 = !e.correct && e.sure && !slip ? 1 : m.misconception
@@ -110,6 +180,8 @@ export function applyAttempt(m: Mastery, e: AttemptEffect): Mastery {
     ...m,
     K,
     A,
+    W,
+    Aw,
     s,
     n: m.n + 1,
     nok: m.nok + (e.correct ? 1 : 0),

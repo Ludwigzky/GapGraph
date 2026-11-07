@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.6.0'
+export const GUIDE_VERSION = '1.7.0'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,16 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.7.0',
+    date: '2026-11-07',
+    items: [
+      '掌握度算法改了：以前是"固定步长的滑动平均"，实际只看最近三题的手感——连对三题就冲到顶，连错几题就砸到底。',
+      '现在按"证据的时间"加权：21 天前的作答自动变淡，同一天里后面的题也会压过前面的题（等效记忆约 14 题）。',
+      '所以你以前错得多、最近在进步，分数会如实反映现在，而不是被历史平均拖住。',
+      '置信度改成看"有效证据量"：不再做满 20 题就永久 99%，久不练习会自己回落。'
+    ]
+  },
   {
     version: '1.6.0',
     date: '2026-11-06',

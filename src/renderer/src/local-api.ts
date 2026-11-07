@@ -55,6 +55,16 @@ function read(): AppState {
     for (const n of PACK.nodes) {
       if (!s.mastery[n.id]) s.mastery[n.id] = freshMastery(n.kind === 'root' ? 1 : 0)
     }
+    // 旧存档迁移：早期版本只存了 n/nok，没有时间衰减的累加器。
+    // 用 n/nok 作为初值，等价于"假设这些证据都是刚刚发生的"，
+    // 之后每做一题都会按真实时间自然衰减，不会凭空丢分。
+    for (const id of Object.keys(s.mastery)) {
+      const m = s.mastery[id]
+      if (m && typeof m.W !== 'number') {
+        m.W = m.n ?? 0
+        m.Aw = (m.nok ?? 0) * 1
+      }
+    }
     return s
   } catch {
     storageOk = false

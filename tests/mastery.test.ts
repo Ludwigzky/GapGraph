@@ -131,6 +131,64 @@ describe('掌握度模型', () => {
   })
 })
 
+describe('时间衰减：能力值反映"现在"，不是"历史平均"', () => {
+  const hit = (m: ReturnType<typeof freshMastery>, correct: boolean, now: number) =>
+    applyAttempt(m, { difficulty: 3, correct, weight: 1, sure: false, guessed: false, now, errorReason: null })
+
+  /** 70 道错题，然后隔一阵 30 道对题 → 应该认得出在进步 */
+  it('先错后对：最近的对题能把能力值拉起来', () => {
+    let m = freshMastery(1)
+    for (let i = 0; i < 70; i++) m = hit(m, false, T0 + i * DAY)
+    for (let i = 0; i < 30; i++) m = hit(m, true, T0 + 100 * DAY + i * DAY)
+    expect(m.A).toBeGreaterThan(0.6)
+    expect(masteryScore(m, T0 + 130 * DAY)).toBeGreaterThan(0.45)
+  })
+
+  /** 同样 30 对 70 错，但对题在前面 → 现在应该很差 */
+  it('先对后错：早期的对题救不了当前状态', () => {
+    let m = freshMastery(1)
+    for (let i = 0; i < 30; i++) m = hit(m, true, T0 + i * DAY)
+    for (let i = 0; i < 70; i++) m = hit(m, false, T0 + 100 * DAY + i * DAY)
+    expect(m.A).toBeLessThan(0.35)
+  })
+
+  it('同样的对错总数，顺序不同结果必须不同（旧的固定步长模型区分不出来）', () => {
+    let up = freshMastery(1)
+    for (let i = 0; i < 60; i++) up = hit(up, i < 40, T0 + i * DAY)
+    for (let i = 0; i < 20; i++) up = hit(up, true, T0 + 70 * DAY + i * DAY)
+
+    let down = freshMastery(1)
+    for (let i = 0; i < 20; i++) down = hit(down, true, T0 + i * DAY)
+    for (let i = 0; i < 60; i++) down = hit(down, i < 40, T0 + 70 * DAY + i * DAY)
+
+    expect(up.A).toBeGreaterThan(down.A + 0.2)
+  })
+
+  it('同一天内先错后对，也能识别出"刚才是不会，现在会了"', () => {
+    let m = freshMastery(1)
+    for (let i = 0; i < 20; i++) m = hit(m, false, T0 + i * 60_000)
+    const afterWrong = m.A
+    for (let i = 0; i < 20; i++) m = hit(m, true, T0 + (30 + i) * 60_000)
+    expect(afterWrong).toBeLessThan(0.3)
+    expect(m.A).toBeGreaterThan(0.6)
+  })
+
+  it('一次失误不会把能力值打到 0（有先验兜着）', () => {
+    const m = hit(freshMastery(1), false, T0)
+    expect(m.A).toBeGreaterThan(0.1)
+    expect(m.A).toBeLessThan(0.3)
+  })
+
+  it('久不练习：有效证据量衰减，置信度跟着回落', () => {
+    let m = freshMastery(1)
+    for (let i = 0; i < 20; i++) m = hit(m, true, T0 + i * DAY)
+    const fresh = effective(m, T0 + 20 * DAY).conf
+    const stale = effective(m, T0 + 20 * DAY + 120 * DAY).conf
+    expect(fresh).toBeGreaterThan(0.75)
+    expect(stale).toBeLessThan(fresh - 0.3)
+  })
+})
+
 describe('判分', () => {
   const q = (answer: string[], type: Question['type'] = 'blank'): Question => ({
     id: 't',
