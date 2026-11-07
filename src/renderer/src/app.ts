@@ -317,7 +317,7 @@ function renderSettings(): void {
 
       <div class="sblock">
         <h3>AI 服务地址（可选）</h3>
-        <input type="text" id="set-ai" value="${esc(getEndpoint())}" placeholder="http://127.0.0.1:3300" class="sinput" style="width:100%" />
+        <input type="text" id="set-ai" value="${esc(getEndpoint())}" class="sinput" style="width:100%" />
         <div class="gsub" style="margin-top:6px">
           留空 = 只用预生成讲解（离线可用）。想用实时问答：先在命令行跑
           <code>node scripts/ai-proxy.cjs</code>，再把地址填这里。浏览器版必须这样走，因为直接调 API 会被跨域拦住。
@@ -445,8 +445,9 @@ function renderWizard(): void {
                      </div>`
                 )
                 .join('')}
-              <div class="askrow" style="margin-top:10px">
-                <input id="wz-chapter" placeholder="没有？直接写章节名，比如「立体几何」" value="${esc(w.customChapter)}" />
+              <div class="gsub" style="margin-top:10px">列表里没有，就在下面写一个章节名，让 AI 现场拆</div>
+              <div class="askrow" style="margin-top:6px">
+                <input id="wz-chapter" value="${esc(w.customChapter)}" />
                 <button class="small" id="wz-gen" ${w.busy ? 'disabled' : ''}>${w.busy ? '生成中…' : 'AI 生成'}</button>
               </div>
               ${
@@ -685,8 +686,9 @@ function renderHome(): void {
                    mergeCheck.ok ? '同学科，可以融合成一张图' : esc(mergeCheck.reason ?? '')
                  }</span>
                </div>
-               <div class="askrow" style="margin-top:10px">
-                 <input id="merge-name" placeholder="给融合后的板块取个名字，比如「烃类化合物」" />
+               <div class="gsub" style="margin-top:10px">给融合后的板块起个名字</div>
+               <div class="askrow" style="margin-top:6px">
+                 <input id="merge-name" />
                  <button class="primary small" id="merge-go" ${mergeCheck.ok ? '' : 'disabled'}>融合</button>
                  <button class="ghost small" id="merge-cancel">取消</button>
                </div>
@@ -1287,7 +1289,7 @@ function renderPanel(): void {
         const st = askState && askState.nodeId === n.id ? askState : null
         return `
           <div class="askrow">
-            <input id="ask-input" placeholder="比如：为什么这里要取对数？" ${st?.loading ? 'disabled' : ''} />
+            <input id="ask-input" ${st?.loading ? 'disabled' : ''} />
             <button class="primary small" id="ask-btn" ${st?.loading ? 'disabled' : ''}>${st?.loading ? '思考中…' : '问'}</button>
           </div>
           <div class="askchips" style="margin-top:8px">${nodeAskPresets(n)
@@ -2077,7 +2079,7 @@ function renderModal(): void {
       <button class="opt ${session!.answer === 'false' ? 'sel' : ''}" data-judge="false">错误</button>
     </div>`
   } else {
-    inputHtml = `<input class="blank" id="blank" placeholder="输入答案，如：x>1、3/2、{0,2}" value="${session!.answer.replace(/"/g, '&quot;')}" />`
+    inputHtml = `<input class="blank" id="blank" value="${session!.answer.replace(/"/g, '&quot;')}" />`
   }
 
   const fb =
@@ -2109,7 +2111,7 @@ function renderModal(): void {
          <div class="askhead"><b>对这题还有疑问？</b><span>已作答，可以追问</span></div>
          <div class="askchips">${askChips.map((p) => `<button class="askchip" data-ask="${p}">${p}</button>`).join('')}</div>
          <div class="askrow">
-           <input id="qask-input" class="askinput" placeholder="具体问一句，比如：为什么不能用判别式？"
+           <input id="qask-input" class="askinput"
              value="${esc(askDraft).replace(/"/g, '&quot;')}" ${askBusy ? 'disabled' : ''} />
            <button class="primary small" id="ask-send" ${askBusy ? 'disabled' : ''}>${askBusy ? '想问…' : '问'}</button>
          </div>

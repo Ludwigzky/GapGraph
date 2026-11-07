@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.12.0'
+export const GUIDE_VERSION = '1.12.1'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,14 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.12.1',
+    date: '2026-11-07',
+    items: [
+      '所有输入框里的示例文字都清掉了——那些「比如：为什么这里要取对数？」会把话题带偏，现在框里是空的，想问什么自己写。',
+      '本来只靠占位提示才能看懂的两个输入框（自己写章节名、给融合板块取名），改成在框外面写一句说明，不再往框里塞示例。'
+    ]
+  },
   {
     version: '1.12.0',
     date: '2026-11-07',
