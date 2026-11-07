@@ -108,6 +108,8 @@ export class KnowledgeGraph {
   private dragTarget: { id: string; x: number; y: number } | null = null
   private simRaf = 0
   private simFrames = 0
+  /** 温度：1 = 剧烈，接近 0 = 冷却静止。交互时重新加热（和 Obsidian 一样） */
+  private alpha = 1
   private panFrom: { x: number; y: number; tx: number; ty: number } | null = null
   private downAt: { x: number; y: number } | null = null
   private edgeEls: { spec: EdgeSpec; line: SVGLineElement }[] = []
@@ -231,6 +233,29 @@ export class KnowledgeGraph {
       .filter((b): b is NodeBox => !!b)
   }
 
+  /** 力场参数：向心力 / 斥力 / 弹簧长度，和 Obsidian 关系图那几个滑杆是一回事 */
+  private params(n: number): {
+    w: number
+    h: number
+    charge: number
+    linkDistance: number
+    linkStrength: number
+    centerStrength: number
+    velocityDecay: number
+    maxStep: number
+  } {
+    return {
+      w: W,
+      h: H,
+      charge: -120,
+      linkDistance: Math.round(Math.max(100, Math.min(190, Math.sqrt((W * H) / Math.max(1, n)) * 0.62))),
+      linkStrength: 0.54,
+      centerStrength: 0.05,
+      velocityDecay: 0.45,
+      maxStep: 6
+    }
+  }
+
   private layout(iterations = 340): void {
     const vis = this.visibleNodes()
     const list: NodeBox[] = []
@@ -248,12 +273,17 @@ export class KnowledgeGraph {
     })
     if (!list.length) return
     const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
-    const ideal = Math.sqrt((W * H) / list.length) * 0.5
+    const p = this.params(list.length)
+
+    // 初始布局：温度从 1 一路冷到接近 0，和图打开时的"冷却"过程一致
+    this.alpha = 1
     for (let i = 0; i < iterations; i++) {
-      forceStep(list, edges, { w: W, h: H, ideal })
-      if (i % 20 === 0) separateBoxes(list, 14, 6)
+      forceStep(list, edges, { ...p, alpha: this.alpha })
+      if (i % 20 === 0) separateBoxes(list, 14, 6, undefined, 0.8)
+      this.alpha += (0 - this.alpha) * 0.0228
     }
     separateBoxes(list, 16, 40)
+    this.alpha = 0
   }
 
   setPositions(pos: Record<string, [number, number]>): void {
@@ -270,9 +300,14 @@ export class KnowledgeGraph {
     if (any) {
       const list = this.listOfVisible()
       const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
-      const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.5
-      for (let i = 0; i < 70; i++) forceStep(list, edges, { w: W, h: H, ideal })
+      const p = this.params(list.length)
+      this.alpha = 1
+      for (let i = 0; i < 140; i++) {
+        forceStep(list, edges, { ...p, alpha: this.alpha })
+        this.alpha += (0 - this.alpha) * 0.0228
+      }
       separateBoxes(list, 16, 24)
+      this.alpha = 0
       this.render()
     }
   }
@@ -388,33 +423,33 @@ export class KnowledgeGraph {
       }
     }
 
+    // 拖动时保持"热"，松手后按 d3 的节奏冷却
+    if (this.dragTarget) this.alpha = Math.max(this.alpha, 0.5)
+    else this.alpha += (0 - this.alpha) * 0.0228
+
     const ids = new Set(list.map((b) => b.id))
     const edges = this.physicsEdges(ids)
-    const ideal = Math.sqrt((W * H) / list.length) * 0.5
-    forceStep(list, edges, { w: W, h: H, ideal, damping: 0.9, maxStep: 4.5 })
+    const p = this.params(list.length)
+    forceStep(list, edges, { ...p, alpha: this.alpha })
 
-    // 分离只推一部分，但不能把用户摆好的节点推走：先记下，推完再放回去。
-    // 拖动时用软推力（手感像磁铁），松手后加大推力——否则弹簧拉力和分离力
-    // 会在稳态下打个平手，留一点永久重叠。
+    // 分离只推一部分：拖动时软推（像磁铁），松手后加力收敛
     const settling = !this.dragTarget
     const pinned = list.filter((b) => b.pinned).map((b) => ({ b, x: b.x, y: b.y }))
     separateBoxes(list, 12, settling ? 3 : 2, { w: W, h: H }, settling ? 0.8 : 0.35)
-    for (const p of pinned) {
-      p.b.x = p.x
-      p.b.y = p.y
+    for (const pin of pinned) {
+      pin.b.x = pin.x
+      pin.b.y = pin.y
     }
 
     this.syncAll()
 
-    let energy = 0
-    for (const b of list) energy += Math.abs(b.vx) + Math.abs(b.vy)
-    // 关键：位移小的节点不一定没重叠（分离器只改位置不改速度），
-    // 所以"还有重叠"也必须让循环继续，直到解开为止。
     const overlapping = hasOverlap(list, 8)
-    const busy = energy > 1.2 || overlapping || !!this.dragTarget
+    // 还有重叠就重新加热一点，别让低温把重叠"冻"在那儿
+    if (overlapping && !this.dragTarget) this.alpha = Math.max(this.alpha, 0.12)
+
+    const busy = this.alpha > 0.006 || overlapping || !!this.dragTarget
     if (!busy) return false
-    if (this.simFrames++ > 400) {
-      // 兜底：极少数情况下（比如用户把两个点叠死）不要无限转下去
+    if (this.simFrames++ > 900) {
       this.simFrames = 0
       return false
     }

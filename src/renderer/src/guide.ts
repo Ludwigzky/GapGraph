@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.2.1'
+export const GUIDE_VERSION = '1.3.0'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,16 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.3.0',
+    date: '2026-11-06',
+    items: [
+      '图谱力学换成和 Obsidian 关系图同一套模型：向心力 + 节点互斥 + 连线弹簧（有静止长度）。',
+      '修掉"整体被推成一团云"的问题：原来节点位移算大了近 500 倍，现在边的长度稳定在 140 像素左右。',
+      '加上"温度"机制：打开时剧烈排布，然后自然冷却静止；你一拖动它会重新加热，周围跟着活起来。',
+      '拖动时邻居每帧只挪 7–9 像素，是连续被挤开，不是瞬移。'
+    ]
+  },
   {
     version: '1.2.1',
     date: '2026-11-06',

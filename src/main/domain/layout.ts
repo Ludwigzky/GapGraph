@@ -198,49 +198,78 @@ export interface ForceEdge {
  *  - 轻微向心力（别飘走）
  *  - 用户拖过的节点固定不动
  */
-export function forceStep(
-  nodes: ForceNode[],
-  edges: ForceEdge[],
-  opts: { w: number; h: number; ideal?: number; gravity?: number; damping?: number; maxStep?: number }
-): void {
+export interface ForceOpts {
+  w: number
+  h: number
+  /** 温度：1 = 刚开始剧烈，接近 0 = 冷却静止。拖动时重新加热 */
+  alpha?: number
+  /** 节点间斥力，负值表示互相推开（d3 里叫 charge） */
+  charge?: number
+  /** 相连节点想保持的距离 */
+  linkDistance?: number
+  /** 相连节点的弹簧强度 0..1 */
+  linkStrength?: number
+  /** 向心力：所有节点被拉向画布中心 */
+  centerStrength?: number
+  /** 速度衰减 0..1，越大越"黏" */
+  velocityDecay?: number
+  /** 单帧位移上限，防止瞬移 */
+  maxStep?: number
+}
+
+/**
+ * 一步力导向，按 d3-force 的那套语义（Obsidian 关系图也是这个模型）：
+ *
+ *   ① 斥力   F = charge / d²        —— 像一堆正电荷互相推开
+ *   ② 弹簧   F = (d − 距离) / d     —— 相连的节点被一根有静止长度的绳子拉着
+ *   ③ 向心   F = (中心 − p)         —— 整体像在一个引力井里
+ *   ④ 积分   v *= 衰减;  p += v
+ *
+ * 关键区别：**弹簧是"保持距离"，不是"越远越用力"**。
+ * 之前写成 d²/k 会越拉越猛，长边一架就把整张图搅乱。
+ */
+export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpts): void {
   const w = opts.w
   const h = opts.h
   const n = nodes.length
   if (n === 0) return
-  const ideal = opts.ideal ?? Math.max(90, Math.sqrt((w * h) / n) * 0.62)
-  const gravity = opts.gravity ?? 0.012
-  const damping = opts.damping ?? 0.82
+
+  const alpha = Math.max(0, Math.min(1, opts.alpha ?? 1))
+  const charge = opts.charge ?? -120
+  const linkDistance = opts.linkDistance ?? 120
+  const linkStrength = opts.linkStrength ?? 0.54
+  const centerStrength = opts.centerStrength ?? 0.05
+  const velocityDecay = Math.max(0, Math.min(0.95, opts.velocityDecay ?? 0.45))
+  const maxStep = opts.maxStep ?? 60
   const cx = w / 2
   const cy = h / 2
 
   const byId = new Map(nodes.map((x) => [x.id, x]))
 
-  // 排斥
+  // ① 斥力
   for (let i = 0; i < n; i++) {
     const a = nodes[i]
     for (let j = i + 1; j < n; j++) {
       const b = nodes[j]
-      let dx = a.x - b.x
-      let dy = a.y - b.y
+      let dx = b.x - a.x
+      let dy = b.y - a.y
       let d2 = dx * dx + dy * dy
-      if (d2 < 1e-6) {
-        // 完全重合时给一个确定性的错开方向，避免随机抖动
-        dx = (i % 2 === 0 ? 1 : -1) * 0.6
-        dy = (j % 2 === 0 ? 1 : -1) * 0.8
+      if (d2 < 1e-4) {
+        // 完全重合：给一个确定性的抖动方向，避免除零和随机抖动
+        dx = (i % 2 === 0 ? 1 : -1) * 0.7
+        dy = (j % 2 === 0 ? 1 : -1) * 0.9
         d2 = dx * dx + dy * dy
       }
-      const d = Math.sqrt(d2)
-      const f = (ideal * ideal) / d
-      const ux = dx / d
-      const uy = dy / d
-      a.vx += ux * f * 0.5
-      a.vy += uy * f * 0.5
-      b.vx -= ux * f * 0.5
-      b.vy -= uy * f * 0.5
+      // d3: w = charge * alpha / d²，位移 = d 向量 × w，等效强度 ∝ 1/d
+      const k = (charge * alpha) / d2
+      a.vx += dx * k
+      a.vy += dy * k
+      b.vx -= dx * k
+      b.vy -= dy * k
     }
   }
 
-  // 吸引（边）
+  // ② 弹簧：拉向"静止长度"，不是越远越猛
   for (const e of edges) {
     const a = byId.get(e.a)
     const b = byId.get(e.b)
@@ -248,28 +277,25 @@ export function forceStep(
     const dx = b.x - a.x
     const dy = b.y - a.y
     const d = Math.hypot(dx, dy) || 1
-    const f = ((d * d) / ideal) * (e.strength ?? 1) * 0.5
-    const ux = dx / d
-    const uy = dy / d
-    a.vx += ux * f
-    a.vy += uy * f
-    b.vx -= ux * f
-    b.vy -= uy * f
+    const strength = (e.strength ?? 1) * linkStrength * alpha
+    const l = ((d - linkDistance) / d) * strength
+    a.vx += dx * l
+    a.vy += dy * l
+    b.vx -= dx * l
+    b.vy -= dy * l
   }
 
-  // 向心 + 阻尼 + 落位
+  // ③ 向心 + ④ 积分
   for (const nd of nodes) {
-    nd.vx += (cx - nd.x) * gravity
-    nd.vy += (cy - nd.y) * gravity
+    nd.vx += (cx - nd.x) * centerStrength * alpha
+    nd.vy += (cy - nd.y) * centerStrength * alpha
     if (nd.pinned) {
       nd.vx = 0
       nd.vy = 0
       continue
     }
-    nd.vx *= damping
-    nd.vy *= damping
-    // 单步位移限幅：初始化时可以迈大步快速收敛，动画里必须小步，否则像瞬移
-    const maxStep = opts.maxStep ?? 60
+    nd.vx *= 1 - velocityDecay
+    nd.vy *= 1 - velocityDecay
     nd.x += Math.max(-maxStep, Math.min(maxStep, nd.vx))
     nd.y += Math.max(-maxStep, Math.min(maxStep, nd.vy))
     nd.x = Math.max(nd.w / 2, Math.min(w - nd.w / 2, nd.x))
