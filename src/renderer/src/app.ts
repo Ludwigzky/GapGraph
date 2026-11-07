@@ -539,6 +539,11 @@ function closeWizard(): void {
  * 之前向导没有关闭入口，用户卡在里面只能刷新页面——这就是这个函数存在的理由。
  */
 function closeTopOverlay(): boolean {
+  // 右栏全屏也算一层：先退出全屏，再关浮层
+  if (panelExpanded) {
+    setPanelExpanded(false)
+    return true
+  }
   const layers: [string, () => void][] = [
     ['#wizard', closeWizard],
     ['#cards', closeCards],
@@ -1112,11 +1117,14 @@ function renderPanel(): void {
   const canGen = aiReady.reachable && aiReady.supportsQuestions
 
   box.innerHTML = `
-    <h2 class="node-name">${esc(n.name)}${
-      n.kind === 'root'
-        ? ''
-        : `<button class="node-del" id="del-node" title="删除这个考点">✕</button>`
-    }</h2>
+    <div class="pname-row">
+      <h2 class="node-name">${esc(n.name)}${
+        n.kind === 'root'
+          ? ''
+          : `<button class="node-del" id="del-node" title="删除这个考点">✕</button>`
+      }</h2>
+      <button class="panel-expand" id="panel-expand" title="${panelExpanded ? '返回（Esc）' : '全屏看讲解'}">${panelExpanded ? '⤡' : '⤢'}</button>
+    </div>
     <div class="node-path">${esc(pathOf(n.id))}</div>
     <div class="score-row">
       <div class="score-big ${touched ? '' : 'na'}">${touched ? eff.M.toFixed(2) : '未测'}</div>
@@ -1270,6 +1278,7 @@ function renderPanel(): void {
     c.addEventListener('click', () => selectNode(c.dataset.goto as string))
   })
   box.querySelector('#del-node')?.addEventListener('click', () => deleteNodeInteractive(n.id))
+  box.querySelector('#panel-expand')?.addEventListener('click', () => setPanelExpanded(!panelExpanded))
   box.querySelectorAll<HTMLButtonElement>('[data-star]').forEach((b) => {
     b.addEventListener('click', (ev) => {
       ev.stopPropagation()
@@ -1509,6 +1518,19 @@ function renderPhysics(): void {
       graph.setPhysics({ [key]: physics[key] })
     })
   })
+}
+
+/* ---------------- 右栏全屏 ---------------- */
+
+let panelExpanded = false
+
+/** 全屏看讲解：把右栏铺满整屏，正文限宽保证行长可读 */
+function setPanelExpanded(next: boolean): void {
+  panelExpanded = next
+  document.body.dataset.panel = next ? 'full' : ''
+  renderPanel()
+  const btn = $('#panel-expand') as HTMLButtonElement | null
+  btn?.focus()
 }
 
 /* ---------------- 增删考点 ---------------- */

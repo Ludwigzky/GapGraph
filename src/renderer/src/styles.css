@@ -314,6 +314,43 @@ aside, section { min-height: 0; overflow: auto; }
 h2.node-name { margin: 0 0 2px; font-size: 17px; }
 .node-path { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
 
+/* 右栏标题行：名字 + 全屏开关 */
+.pname-row { display: flex; align-items: flex-start; gap: 8px; }
+.pname-row h2 { flex: 1; min-width: 0; }
+.panel-expand {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #6b7280;
+  border-radius: 8px;
+  width: 28px; height: 28px;
+  font-size: 13px; line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.panel-expand:hover { border-color: #b9bec7; color: var(--ink); }
+
+/* 全屏讲解放大：铺满整屏，正文限宽 820px 居中，行长不至于长得没法读 */
+body[data-panel='full'] #panel {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  border-left: 0;
+  background: var(--bg);
+  overflow: auto;
+  padding: 28px max(28px, calc((100% - 820px) / 2)) 80px;
+}
+body[data-panel='full'] .pname-row {
+  position: sticky;
+  top: -28px;
+  margin: 0 -8px 10px;
+  padding: 12px 8px 8px;
+  background: linear-gradient(var(--bg) 78%, rgba(251, 251, 250, 0));
+  z-index: 2;
+}
+body[data-panel='full'] h2.node-name { font-size: 22px; }
+body[data-panel='full'] .block p { font-size: 14.5px; line-height: 1.9; }
+body[data-panel='full'] .node-path { font-size: 13px; }
+
 .score-row { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; }
 .score-big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .score-big.na { color: var(--muted); font-size: 15px; font-weight: 500; }

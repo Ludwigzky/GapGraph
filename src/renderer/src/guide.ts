@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.4.1'
+export const GUIDE_VERSION = '1.4.2'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.4.2',
+    date: '2026-11-06',
+    items: [
+      '右栏讲解可以全屏了：标题旁点 ⤢，讲解会铺满整屏，正文限宽 820 像素，长段落不会拉成一行看不懂的长条。',
+      '右上角按钮变成 ⤡，点它或按 Esc 都能返回原来的三栏布局。',
+      '全屏时讲解字号略微放大、行距放宽，适合对着屏幕慢慢读。'
+    ]
+  },
   {
     version: '1.4.1',
     date: '2026-11-06',
