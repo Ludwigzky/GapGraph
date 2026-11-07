@@ -1,0 +1,203 @@
+/** 实时 AI：通过本地代理调用（浏览器版受 CORS 限制，必须走代理；Electron 同样可以走） */
+
+const KEY = 'gapgraph.ai.endpoint'
+
+/** 解析出的可用地址（启动时探测一次，之后走缓存） */
+let resolved = ''
+let reachable = false
+let routes: string[] = []
+let probed = false
+
+function readStored(): string {
+  try {
+    return (localStorage.getItem(KEY) ?? '').trim().replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 启动时探测一次：
+ * 1) 设置里填了地址 → 用它
+ * 2) 没填但页面是 http 打开的 → 试同源（代理托管页面的场景）
+ * 3) 探测 /health 不通就认定"没有 AI 服务"
+ *
+ * 之前少了这一步，Vite dev（5180）会被误当成 AI 服务，请求 /pack 直接 404。
+ */
+export async function initEndpoint(): Promise<void> {
+  probed = true
+  const stored = readStored()
+  const origin = /^https?:\/\//.test(location.origin) ? location.origin : ''
+  const candidates = stored ? [stored] : origin ? [origin] : []
+
+  for (const ep of candidates) {
+    try {
+      const res = await fetch(`${ep}/health`, { signal: AbortSignal.timeout(2000) })
+      if (!res.ok) continue
+      const j = (await res.json()) as { ok?: boolean; routes?: string[] }
+      if (j?.ok) {
+        resolved = ep
+        reachable = true
+        routes = Array.isArray(j.routes) ? j.routes : []
+        return
+      }
+    } catch {
+      /* 试下一个 */
+    }
+  }
+  resolved = stored // 填过地址但连不上，也让界面能显示"连不上哪个"
+  reachable = false
+  routes = []
+}
+
+export function getEndpoint(): string {
+  if (resolved) return resolved
+  if (probed) return ''
+  return readStored()
+}
+
+export function endpointStatus(): { endpoint: string; reachable: boolean; supportsPack: boolean; supportsChat: boolean; supportsQuestions: boolean } {
+  return {
+    endpoint: getEndpoint(),
+    reachable,
+    supportsPack: routes.includes('pack'),
+    supportsChat: routes.includes('chat'),
+    supportsQuestions: routes.includes('questions')
+  }
+}
+
+export interface NewQuestionPayload {
+  type: 'single' | 'blank' | 'judge'
+  difficulty: number
+  stem: string
+  options?: string[]
+  answer: string
+  solution: string
+}
+
+/**
+ * 按需为一个考点出题。
+ * 服务端已经做过独立复核（不一致的题会被丢掉），这里只负责传参和解析。
+ */
+export async function generateQuestions(
+  node: { name: string; brief?: string; examWeight: number },
+  need: number,
+  difficulties: number[],
+  ctx?: { exam?: string; subject?: string; chapter?: string }
+): Promise<NewQuestionPayload[]> {
+  const endpoint = getEndpoint()
+  if (!endpoint) return []
+
+  const res = await fetch(`${endpoint}/questions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      nodeName: node.name,
+      brief: node.brief ?? '',
+      examWeight: node.examWeight,
+      need,
+      difficulties: difficulties.slice(0, need),
+      exam: ctx?.exam ?? '',
+      subject: ctx?.subject ?? '',
+      chapter: ctx?.chapter ?? ''
+    }),
+    signal: AbortSignal.timeout(60000)
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`出题失败 ${res.status} ${detail.slice(0, 100)}`)
+  }
+  const data = (await res.json()) as { questions?: NewQuestionPayload[] }
+  return Array.isArray(data.questions) ? data.questions : []
+}
+
+export function setEndpoint(value: string): void {
+  try {
+    const v = value.trim().replace(/\/+$/, '')
+    if (v) localStorage.setItem(KEY, v)
+    else localStorage.removeItem(KEY)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+export interface AskPayload {
+  nodeName: string
+  nodePath: string
+  explain: string
+  question: string
+}
+
+export interface AiCard {
+  type: string
+  front: string
+  back: string
+}
+
+export interface AiAnswer {
+  answer: string
+  cards: AiCard[]
+  ms: number
+}
+
+export interface GeneratedPack {
+  exam: string
+  subject: string
+  chapter: string
+  nodes: unknown[]
+  ms: number
+  tokens: number
+}
+
+/** 让 AI 现场拆一张考纲骨架。没配代理时返回 null。 */
+export async function generatePack(input: {
+  exam: string
+  subject: string
+  chapter: string
+}): Promise<GeneratedPack | null> {
+  const endpoint = getEndpoint()
+  if (!endpoint) return null
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 60000)
+  try {
+    const res = await fetch(`${endpoint}/pack`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+      signal: ctrl.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`生成失败 ${res.status} ${detail.slice(0, 100)}`)
+    }
+    return (await res.json()) as GeneratedPack
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 返回 null 表示"没配代理"；抛错表示"配了但失败" */
+export async function askAi(payload: AskPayload): Promise<AiAnswer | null> {
+  const endpoint = getEndpoint()
+  if (!endpoint) return null
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 20000)
+  try {
+    const res = await fetch(`${endpoint}/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`代理返回 ${res.status} ${detail.slice(0, 80)}`)
+    }
+    const data = (await res.json()) as AiAnswer
+    return { answer: String(data.answer ?? ''), cards: Array.isArray(data.cards) ? data.cards : [], ms: Number(data.ms) || 0 }
+  } finally {
+    clearTimeout(timer)
+  }
+}

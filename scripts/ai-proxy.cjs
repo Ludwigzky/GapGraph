@@ -1,0 +1,458 @@
+/**
+ * 本地 AI 代理。
+ *
+ * 解决什么问题：浏览器（http://localhost 或 file://）直接调 api.deepseek.com 会被 CORS 拦掉，
+ * 而 Electron 主进程没有这个限制。这个代理把"带密钥的跨域请求"搬到一个本地进程里，
+ * 浏览器只跟 127.0.0.1 说话。
+ *
+ * 用法：node scripts/ai-proxy.cjs        （默认 127.0.0.1:3300）
+ * 然后在本软件「设置 → AI 服务地址」里填 http://127.0.0.1:3300
+ *
+ * 密钥来源：环境变量 DEEPSEEK_API_KEY，或 ~/.dsh/.credentials.yaml（只读，不打印）
+ */
+const http = require('node:http')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+
+const PORT = Number(process.env.AI_PROXY_PORT || 3300)
+const HOST = '127.0.0.1'
+const UPSTREAM = 'https://api.deepseek.com/chat/completions'
+const MODEL = 'deepseek-chat'
+
+function loadKey() {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
+  const f = path.join(os.homedir(), '.dsh', '.credentials.yaml')
+  if (!fs.existsSync(f)) return null
+  const raw = fs.readFileSync(f, 'utf8')
+  const m =
+    raw.match(/DEEPSEEK_API_KEY[\s\S]{0,200}?(sk-[A-Za-z0-9_\-]{10,})/) ||
+    raw.match(/(sk-[A-Za-z0-9_\-]{20,})/)
+  return m ? m[1] : null
+}
+
+const KEY = loadKey()
+if (!KEY) {
+  console.error('[ai-proxy] 没找到 API key（环境变量 DEEPSEEK_API_KEY 或 ~/.dsh/.credentials.yaml）')
+  process.exit(1)
+}
+
+/**
+ * 出题/讲解用的身份与要求，必须跟着章节走。
+ * 之前这里写死了"高考数学"，导致英语章节也会冒出导函数题。
+ */
+function teacherSystem(exam, subject, kind) {
+  const who = [exam, subject].filter(Boolean).join(' ') || '高中'
+  const role = kind === 'verify' ? '阅卷老师' : '命题老师'
+  return `你是${who}${role}。只输出 JSON，不要任何解释文字。
+题目必须答案唯一、可验证、不依赖图表、题干自成一体。
+难度分级：1=课本例题，2=常规练习，3=考试中档，4=考试压轴，5=超纲/竞赛入门。
+题目内容必须严格属于给定的章节，不要串到别的学科或别的章节。`
+}
+
+function verifySystem(exam, subject) {
+  const who = [exam, subject].filter(Boolean).join(' ') || '高中'
+  return `你是${who}阅卷老师。独立把题做一遍，不要相信题目给的答案，只输出 JSON。
+如果题目有歧义、条件不足或多解，把 ambiguous 置为 true。`
+}
+
+/**
+ * 带硬超时的上游请求。
+ *
+ * 为什么必须有：实测约 1/8 的请求会"连接挂住"——一个字节都不回。
+ * Node 的 fetch（undici）默认 headersTimeout 是 300 秒，没有这层保护时
+ * 一次挂起就会卡五分钟，用户点一下按钮等于卡死。
+ */
+async function upstream(body, timeoutMs = 25000) {
+  const res = await fetch(UPSTREAM, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    const err = new Error(`上游 ${res.status}`)
+    err.status = res.status
+    err.detail = text.slice(0, 200)
+    throw err
+  }
+  return JSON.parse(text)
+}
+
+/** 挂住时重试一次；再挂就交给调用方报错 */
+async function upstreamRetry(body, timeoutMs = 25000, tries = 2) {
+  let lastErr
+  for (let i = 1; i <= tries; i++) {
+    try {
+      return await upstream(body, timeoutMs)
+    } catch (e) {
+      lastErr = e
+      if (e.status) throw e // HTTP 错误不重试
+      if (i < tries) await new Promise((r) => setTimeout(r, 300 * i))
+    }
+  }
+  throw lastErr
+}
+
+function cors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'content-type')
+  res.setHeader('Access-Control-Max-Age', '600')
+}
+
+function json(res, code, body) {
+  cors(res)
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify(body))
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let b = ''
+    req.on('data', (c) => {
+      b += c
+      if (b.length > 64 * 1024) reject(new Error('body too large'))
+    })
+    req.on('end', () => {
+      try {
+        resolve(b ? JSON.parse(b) : {})
+      } catch {
+        reject(new Error('invalid json'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+const server = http.createServer(async (req, res) => {
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204).end()
+    return
+  }
+
+  if (req.method === 'GET' && req.url === '/health') {
+    json(res, 200, { ok: true, model: MODEL, routes: ['chat', 'pack', 'questions'], pid: process.pid })
+    return
+  }
+
+  // 静态托管 out/web：让页面和接口同源，浏览器不会因为没有跨域头而拦住
+  if (req.method === 'GET') {
+    const root = path.resolve('out/web')
+    if (!fs.existsSync(root)) {
+      res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('还没构建前端。先运行：npm run build:web')
+      return
+    }
+    let rel = decodeURIComponent((req.url || '/').split('?')[0])
+    if (rel === '/') rel = '/index.html'
+    let file = path.join(root, rel)
+    if (!file.startsWith(root)) {
+      res.writeHead(403).end('forbidden')
+      return
+    }
+    if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(root, 'index.html')
+    const MIME = {
+      '.html': 'text/html; charset=utf-8',
+      '.js': 'text/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.svg': 'image/svg+xml',
+      '.png': 'image/png'
+    }
+    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' })
+    fs.createReadStream(file).pipe(res)
+    return
+  }
+
+  if (req.method !== 'POST' || !['/chat', '/pack', '/questions'].includes(req.url)) {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+
+  /* ---------- 生成考纲骨架：任何考试、任何章节都装得进来 ---------- */
+  if (req.url === '/pack') {
+    try {
+      const body = await readBody(req)
+      const exam = String(body.exam || '').slice(0, 40)
+      const subject = String(body.subject || '').slice(0, 40)
+      const chapter = String(body.chapter || '').slice(0, 60)
+      if (!exam || !subject || !chapter) {
+        json(res, 400, { error: '缺少 exam / subject / chapter' })
+        return
+      }
+
+      const t0 = Date.now()
+      const data = await upstreamRetry(
+        {
+          model: MODEL,
+          temperature: 0.4,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content: `你是学科教研员。把某个章节拆成一张可供学生自测的知识地图。
+只输出 JSON，不要任何解释。节点数量 18–32 个，必须覆盖该章节的完整考点。
+每个节点的 brief 一句话（30 字以内，说清"是什么/怎么考"）。
+严格按此结构输出：
+{"nodes":[{"id":"n1","name":"考点名","parentId":null,"kind":"root|concept|skill","examWeight":0.8,"prereq":[],"brief":"..."}]}
+规则：
+- 有且只有一个 kind=root 的根节点，parentId 为 null
+- 其余节点的 parentId 必须是已有节点 id
+- prereq 填"必须先学会"的节点 id（可为空数组）
+- examWeight 取 0.2–1.0，表示考频×分值的相对重要性
+- kind=skill 表示"题型/方法"，kind=concept 表示"概念/定理"`
+            },
+            {
+              role: 'user',
+              content: `考试：${exam}\n科目：${subject}\n章节：${chapter}`
+            }
+          ]
+        },
+        30000
+      )
+      const content = data.choices?.[0]?.message?.content ?? '{}'
+      let parsed
+      try {
+        parsed = JSON.parse(content)
+      } catch {
+        json(res, 502, { error: 'AI 没有返回合法 JSON' })
+        return
+      }
+      const nodes = Array.isArray(parsed.nodes) ? parsed.nodes : []
+      if (nodes.length < 5) {
+        json(res, 502, { error: `生成的节点太少（${nodes.length} 个）` })
+        return
+      }
+
+      json(res, 200, {
+        exam,
+        subject,
+        chapter,
+        nodes,
+        ms: Date.now() - t0,
+        tokens: (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0)
+      })
+    } catch (e) {
+      json(res, 500, { error: String(e.message || e) })
+    }
+    return
+  }
+
+  /* ---------- 按需出题：只为"现在真的要做的那个考点"出题 ---------- */
+  if (req.url === '/questions') {
+    try {
+      const body = await readBody(req)
+      const nodeName = String(body.nodeName || '').slice(0, 60)
+      const brief = String(body.brief || '').slice(0, 200)
+      // 学科上下文必须由调用方带过来，否则会出成别的科目
+      const exam = String(body.exam || '').slice(0, 30)
+      const subject = String(body.subject || '').slice(0, 30)
+      const chapter = String(body.chapter || '').slice(0, 60)
+      const examWeight = Number(body.examWeight) || 0.6
+      const need = Math.min(5, Math.max(1, Number(body.need) || 3))
+      const diffs = Array.isArray(body.difficulties) && body.difficulties.length
+        ? body.difficulties.slice(0, need).map((d) => Math.min(5, Math.max(1, Number(d) || 3)))
+        : Array.from({ length: need }, (_, i) => Math.min(4, 2 + i))
+      if (!nodeName) {
+        json(res, 400, { error: '缺少 nodeName' })
+        return
+      }
+
+      const t0 = Date.now()
+      let tokens = 0
+
+      const gen = await upstreamRetry(
+        {
+          model: MODEL,
+          temperature: 0.8,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: teacherSystem(exam, subject) },
+            {
+              role: 'user',
+              content: `章节：${chapter || '（未提供）'}\n考点：${nodeName}\n简述：${brief || '（无）'}\n考频权重：${examWeight}
+
+出 ${need} 道题，难度严格按这个顺序：${diffs.join('、')}
+题目必须属于「${nodeName}」这个考点，不要出成别的章节的内容。
+题型从 single（四选一）/ blank（填空）/ judge（判断）里挑，不要全是同一种。
+{"questions":[{"type":"single","difficulty":2,"stem":"...","options":["选项1","选项2","选项3","选项4"],"answer":"与某个选项完全一致","solution":"两三句话"}]}
+注意：options 只写内容不要 A. 前缀；公式用普通文本，不要 LaTeX。`
+            }
+          ]
+        },
+        25000
+      )
+      tokens += (gen.usage?.prompt_tokens || 0) + (gen.usage?.completion_tokens || 0)
+
+      let raw = []
+      try {
+        raw = JSON.parse(gen.choices?.[0]?.message?.content ?? '{}').questions ?? []
+      } catch {
+        raw = []
+      }
+
+      const keep = []
+      const reject = []
+      for (const q of raw) {
+        if (keep.length >= need) break
+        if (!q || !['single', 'blank', 'judge'].includes(q.type)) {
+          reject.push(`题型非法:${q && q.type}`)
+          continue
+        }
+        if (typeof q.stem !== 'string' || q.stem.trim().length < 6) {
+          reject.push('题干太短')
+          continue
+        }
+        if (typeof q.solution !== 'string' || q.solution.trim().length < 6) {
+          reject.push('解析太短')
+          continue
+        }
+        if (q.type === 'single') {
+          if (!Array.isArray(q.options) || q.options.length !== 4) {
+            reject.push(`选项数=${q.options ? q.options.length : '无'}`)
+            continue
+          }
+          if (new Set(q.options.map((o) => String(o).trim())).size !== 4) {
+            reject.push('选项重复')
+            continue
+          }
+          if (!q.options.some((o) => String(o).trim() === String(q.answer).trim())) {
+            reject.push(`答案不在选项里:${q.answer}`)
+            continue
+          }
+        }
+        if (q.type === 'judge') {
+          // 模型经常写「正确/错误」而不是 true/false，先归一化再校验
+          const t = String(q.answer ?? '').trim().toLowerCase()
+          if (['正确', '对', '是', 'true', 't', '√', 'yes'].includes(t)) q.answer = 'true'
+          else if (['错误', '错', '否', 'false', 'f', '×', 'no'].includes(t)) q.answer = 'false'
+          else {
+            reject.push(`判断题答案非法:${q.answer}`)
+            continue
+          }
+        }
+
+        // 独立复核：不一致就丢
+        try {
+          const opt = q.type === 'single' ? `\n选项：${q.options.map((o, i) => `${'ABCD'[i]}. ${o}`).join('  ')}` : ''
+          const what =
+            q.type === 'judge' ? '判断命题真假，answer 输出 "true" 或 "false"' : q.type === 'single' ? '写出正确选项的内容' : '写出填空答案'
+          const v = await upstreamRetry(
+            {
+              model: MODEL,
+              temperature: 0,
+              response_format: { type: 'json_object' },
+              messages: [
+                { role: 'system', content: verifySystem(exam, subject) },
+                { role: 'user', content: `题目：${q.stem}${opt}\n\n${what}。\n输出：{"answer":"...","ambiguous":false}` }
+              ]
+            },
+            20000
+          )
+          tokens += (v.usage?.prompt_tokens || 0) + (v.usage?.completion_tokens || 0)
+          const ans = JSON.parse(v.choices?.[0]?.message?.content ?? '{}')
+          if (ans.ambiguous) {
+            reject.push('复核认为有歧义')
+            continue
+          }
+          // 去掉 "A." / "选项B：" 这类前缀，去空格，再比
+          const flat = (s) => String(s).replace(/^\s*(选项)?\s*[A-Da-d]\s*[.、．:：)）]\s*/, '').replace(/\s+/g, '').trim()
+          const bare = String(ans.answer ?? '').trim()
+          const letter = bare.replace(/^\s*(选项)?\s*([A-Da-d])\s*$/, '$2').toUpperCase()
+          let agree = false
+          if (q.type === 'single' && /^[A-D]$/.test(letter)) {
+            agree = flat(q.options['ABCD'.indexOf(letter)]) === flat(q.answer)
+          } else if (q.type === 'judge') {
+            const t = bare.toLowerCase()
+            const norm = ['正确', '对', '是', 'true', 't', '√'].includes(t) ? 'true' : ['错误', '错', '否', 'false', 'f', '×'].includes(t) ? 'false' : t
+            agree = norm === String(q.answer)
+          } else {
+            agree = flat(bare) === flat(q.answer) || flat(bare).replace(/^y=/, '') === flat(q.answer).replace(/^y=/, '')
+          }
+          if (!agree) {
+            reject.push(`复核不一致:${q.answer} vs ${bare}`)
+            continue
+          }
+        } catch (e) {
+          reject.push(`复核失败:${e.message}`)
+          continue
+        }
+
+        keep.push({
+          type: q.type,
+          difficulty: Math.min(5, Math.max(1, Number(q.difficulty) || 3)),
+          stem: String(q.stem).slice(0, 220),
+          ...(q.options ? { options: q.options.map((o) => String(o).slice(0, 60)) } : {}),
+          answer: q.answer,
+          solution: String(q.solution).slice(0, 300)
+        })
+      }
+
+      json(res, 200, { nodeName, questions: keep, raw: raw.length, reject, ms: Date.now() - t0, tokens })
+    } catch (e) {
+      json(res, 502, { error: `出题失败：${e.message || e}` })
+    }
+    return
+  }
+
+  try {
+    const body = await readBody(req)
+    const question = String(body.question || '').slice(0, 500)
+    const nodeName = String(body.nodeName || '').slice(0, 60)
+    const nodePath = String(body.nodePath || '').slice(0, 120)
+    const explain = String(body.explain || '').slice(0, 400)
+    if (!question) {
+      json(res, 400, { error: '缺少 question' })
+      return
+    }
+
+    const t0 = Date.now()
+    const data = await upstreamRetry(
+      {
+        model: MODEL,
+        temperature: 0.5,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SYSTEM },
+          {
+            role: 'user',
+            content: `考点：${nodeName}（${nodePath}）\n已有讲解：${explain}\n学生的提问：${question}`
+          }
+        ]
+      },
+      25000
+    )
+    const content = data.choices?.[0]?.message?.content ?? '{}'
+    let parsed
+    try {
+      parsed = JSON.parse(content)
+    } catch {
+      parsed = { answer: content, cards: [] }
+    }
+    json(res, 200, {
+      answer: String(parsed.answer || '').slice(0, 600),
+      cards: (Array.isArray(parsed.cards) ? parsed.cards : []).slice(0, 2).map((c) => ({
+        type: ['conclusion', 'method', 'pitfall', 'formula'].includes(c.type) ? c.type : 'conclusion',
+        front: String(c.front || '').slice(0, 60),
+        back: String(c.back || '').slice(0, 90)
+      })),
+      ms: Date.now() - t0,
+      tokens: (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0)
+    })
+  } catch (e) {
+    json(res, 500, { error: String(e.message || e) })
+  }
+})
+
+server.listen(PORT, HOST, () => {
+  const hasBuild = fs.existsSync(path.resolve('out/web/index.html'))
+  console.log(`[ai-proxy] 已启动 http://${HOST}:${PORT}  model=${MODEL}`)
+  if (hasBuild) {
+    console.log(`[ai-proxy] 直接打开 http://${HOST}:${PORT} 就是完整应用，实时问答自动可用`)
+  } else {
+    console.log('[ai-proxy] 提示：还没构建前端，先运行 npm run build:web')
+  }
+})

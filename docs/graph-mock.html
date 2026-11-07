@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>知识地图 · 图层视图示意 v2（GapGraph 设计参考）</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --panel:#ffffff; --ink:#1f2328; --muted:#6b7280; --line:#e5e7eb;
+    --tree:#c3c9d2; --pre:#5b6472; --con:#ef4444;
+    --c0:#d9dcd9; --c1:#ef4444; --c2:#f97316; --c3:#eab308; --c4:#86efac; --c5:#22c55e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);overflow:hidden;
+       font:14px/1.55 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{padding:12px 20px 8px;border-bottom:1px solid var(--line);background:var(--panel)}
+  h1{margin:0 0 2px;font-size:15px;font-weight:650}
+  .sub{color:var(--muted);font-size:12.5px}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 20px;
+       border-bottom:1px solid var(--line);background:var(--panel)}
+  .bar button{
+    font:inherit;font-size:13px;padding:5px 13px;border-radius:999px;cursor:pointer;
+    border:1px solid var(--line);background:#fff;color:var(--ink);transition:.15s}
+  .bar button:hover{border-color:#b9bec7}
+  .bar button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .zoom{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:2px 4px;background:#fff}
+  .zoom button{border:0;background:transparent;padding:2px 8px;border-radius:999px;font-size:14px;line-height:1;cursor:pointer}
+  .zoom button:hover{background:#f0f1f3}
+  .zoom span{font-size:12px;color:var(--muted);min-width:40px;text-align:center}
+  .sep{flex:1}
+  .legend{display:flex;gap:13px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-items:center}
+  .lg{display:flex;gap:5px;align-items:center;white-space:nowrap}
+  .sw{width:11px;height:11px;border-radius:3px;border:1px solid rgba(0,0,0,.12)}
+  .ln{width:20px;height:0;border-top:2px solid var(--tree)}
+  .ln.pre{border-top:2px dashed var(--pre)}
+  .ln.con{border-top:2px dotted var(--con)}
+  #stage{position:relative;height:calc(100% - 118px);overflow:hidden;cursor:grab;background:
+    radial-gradient(circle at 1px 1px, #e8eaec 1px, transparent 0) 0 0/22px 22px, var(--bg)}
+  #stage.dragging{cursor:grabbing}
+  svg{display:block;width:100%;height:100%;font-family:inherit}
+  svg[data-mode="structure"] .e-pre,svg[data-mode="structure"] .e-con{display:none}
+  svg[data-mode="gap"] .e-con{display:none}
+  svg[data-mode="gap"] .node.dim{opacity:.20}
+  svg[data-mode="deps"] .e-tree{opacity:.14}
+  svg[data-mode="deps"] .e-pre,svg[data-mode="deps"] .e-con{display:inline}
+  svg[data-mode="deps"] .node.dim{opacity:.30}
+  svg[data-fold="1"] [data-d3="1"]{display:none}
+  .node{cursor:pointer;transition:opacity .15s}
+  .node.dim{opacity:.45}
+  .node text{font-size:11.5px;fill:#1f2328;pointer-events:none;user-select:none}
+  .node.dead text{fill:#8a8f98}
+  .e-tree{stroke:var(--tree);stroke-width:1.8;fill:none;stroke-linecap:round}
+  .e-pre{stroke:var(--pre);stroke-width:1.6;stroke-dasharray:6 5;fill:none;stroke-linecap:round}
+  .e-con{stroke:var(--con);stroke-width:1.8;stroke-dasharray:1.5 5;stroke-linecap:round;fill:none}
+  g.edge.dim{opacity:.12}
+  #tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .12s;
+       background:#1f2328;color:#fff;padding:8px 11px;border-radius:8px;font-size:12.5px;
+       max-width:270px;line-height:1.6;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:9}
+  #tip b{font-weight:650}
+  #tip .row{color:#c9ced6;font-size:11.5px}
+  footer{padding:8px 20px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);background:var(--panel)}
+  kbd{background:#eef0f2;border-radius:4px;padding:1px 5px;font-size:11px;font-family:inherit}
+</style>
+</head>
+<body>
+<header>
+  <h1>知识地图 · 高中「函数」板块（42 个节点）· v2</h1>
+  <div class="sub">曲线由两端节点的中心点自动生成，只声明「谁连谁」，不存在连不上。</div>
+</header>
+
+<div class="bar">
+  <button data-mode="structure" aria-pressed="true">① 结构：我学到哪了</button>
+  <button data-mode="gap" aria-pressed="false">② 缺口：哪块塌了</button>
+  <button data-mode="deps" aria-pressed="false">③ 依赖 · 易混：为什么</button>
+  <button id="fold" aria-pressed="false" title="打开后只显示前两层，屏幕更清爽">折叠第三层</button>
+
+  <div class="zoom">
+    <button id="zo" title="缩小">−</button>
+    <span id="zl">100%</span>
+    <button id="zi" title="放大">＋</button>
+    <button id="zf" title="缩到能看全部" style="font-size:12px">全览</button>
+    <button id="z1" title="回到 100%" style="font-size:12px">100%</button>
+  </div>
+
+  <span class="sep"></span>
+  <div class="legend">
+    <span class="lg"><i class="sw" style="background:var(--c1)"></i>塌了</span>
+    <span class="lg"><i class="sw" style="background:var(--c2)"></i>不稳</span>
+    <span class="lg"><i class="sw" style="background:var(--c3)"></i>勉强</span>
+    <span class="lg"><i class="sw" style="background:var(--c5)"></i>稳</span>
+    <span class="lg"><i class="sw" style="background:var(--c0)"></i>没测过</span>
+    <span class="lg"><i class="ln"></i>层级</span>
+    <span class="lg"><i class="ln pre"></i>前置（地基）</span>
+    <span class="lg"><i class="ln con"></i>易混</span>
+  </div>
+</div>
+
+<div id="stage">
+  <svg id="svg" data-mode="structure"><g id="cam"><g id="gEdge"></g><g id="gNode"></g></g></svg>
+  <div id="tip"></div>
+</div>
+
+<footer>
+  <kbd>滚轮</kbd> 缩放（以光标为中心） · <kbd>拖拽</kbd> 平移 · <kbd>点节点</kbd> 只看它的上下游 · <kbd>点空白</kbd> 复位
+</footer>
+
+<script>
+/* ================= 数据：42 个节点 ================= */
+/* k: c=概念（圆角矩形） s=题型·方法（切角） ; m=掌握分(null=没测过) ; n=做过几题 */
+const N = [
+  {id:'root', name:'函数',        p:null,  k:'c', m:0.62, n:28},
+  {id:'A', name:'函数概念',        p:'root',k:'c', m:0.71, n:12},
+  {id:'B', name:'函数性质',        p:'root',k:'c', m:0.66, n:15},
+  {id:'C', name:'基本初等函数',    p:'root',k:'c', m:0.34, n:22},
+  {id:'D', name:'函数应用',        p:'root',k:'c', m:0.52, n:5},
+  {id:'A1',name:'定义',           p:'A',   k:'c', m:0.82, n:4},
+  {id:'A2',name:'定义域',          p:'A',   k:'c', m:0.72, n:9},
+  {id:'A3',name:'值域',           p:'A',   k:'c', m:0.22, n:6},
+  {id:'A5',name:'分段函数',        p:'A',   k:'c', m:0.58, n:3},
+  {id:'A2a',name:'分式',          p:'A2',  k:'c', m:0.80, n:3},
+  {id:'A2b',name:'根式',          p:'A2',  k:'c', m:0.74, n:3},
+  {id:'A2c',name:'对数真数',       p:'A2',  k:'c', m:0.36, n:4},
+  {id:'A2d',name:'实际约束',       p:'A2',  k:'c', m:null, n:0},
+  {id:'B1',name:'单调性',          p:'B',   k:'c', m:0.78, n:8},
+  {id:'B2',name:'奇偶性',          p:'B',   k:'c', m:0.64, n:5},
+  {id:'B3',name:'周期性',          p:'B',   k:'c', m:0.55, n:3},
+  {id:'B4',name:'对称性',          p:'B',   k:'c', m:0.31, n:5},
+  {id:'B5',name:'最值',           p:'B',   k:'c', m:0.34, n:7},
+  {id:'B6',name:'零点存在',        p:'B',   k:'c', m:0.58, n:4},
+  {id:'B1a',name:'定义法证明',     p:'B1',  k:'s', m:0.70, n:3},
+  {id:'B1b',name:'复合单调',       p:'B1',  k:'s', m:0.45, n:5},
+  {id:'C1',name:'指数函数',        p:'C',   k:'c', m:0.24, n:9},
+  {id:'C2',name:'对数函数',        p:'C',   k:'c', m:0.31, n:10},
+  {id:'C3',name:'幂函数',          p:'C',   k:'c', m:null, n:0},
+  {id:'C4',name:'图像变换',        p:'C',   k:'c', m:0.47, n:4},
+  {id:'C5',name:'反函数',          p:'C',   k:'c', m:null, n:0},
+  {id:'C1a',name:'底数分类',       p:'C1',  k:'c', m:0.28, n:4},
+  {id:'C1b',name:'单调性判断',     p:'C1',  k:'s', m:0.33, n:3},
+  {id:'C1c',name:'比较大小',       p:'C1',  k:'s', m:0.38, n:6},
+  {id:'C1d',name:'过定点',         p:'C1',  k:'c', m:0.72, n:2},
+  {id:'C1e',name:'指数方程',       p:'C1',  k:'s', m:null, n:0},
+  {id:'C2a',name:'对数运算',       p:'C2',  k:'c', m:0.42, n:6},
+  {id:'C2b',name:'换底公式',       p:'C2',  k:'s', m:0.51, n:3},
+  {id:'C2c',name:'定义域',         p:'C2',  k:'c', m:0.36, n:4},
+  {id:'C2d',name:'比较大小',       p:'C2',  k:'s', m:0.29, n:5},
+  {id:'C2e',name:'对数方程',       p:'C2',  k:'s', m:null, n:0},
+  {id:'C3a',name:'五个幂函数',     p:'C3',  k:'c', m:null, n:0},
+  {id:'C3b',name:'幂函数性质',     p:'C3',  k:'c', m:null, n:0},
+  {id:'C4a',name:'平移',          p:'C4',  k:'c', m:0.55, n:2},
+  {id:'C4b',name:'伸缩',          p:'C4',  k:'c', m:0.44, n:2},
+  {id:'D1',name:'函数建模',        p:'D',   k:'c', m:null, n:0},
+  {id:'D2',name:'零点与方程',      p:'D',   k:'c', m:0.52, n:5}
+];
+
+/* 前置：不会 a 就学不动 b（有方向） */
+const PRE = [['A1','B1'],['A2','C2'],['A3','B5'],['B1','C1'],['B1','C2'],
+             ['B1a','B1b'],['C2','C1c'],['C2a','C2d'],['B6','D2']];
+/* 易混：对称（无方向） */
+const CON = [['C1','C2'],['C3','C1'],['B2','B4'],['C1c','C2d']];
+
+/* ================= 布局 ================= */
+const W=118, H=34, GAPX=34, GAPY=104, PADX=70, PADY=44;
+
+const byId={}, kids={};
+N.forEach(n=>{ byId[n.id]=n; if(n.p){ (kids[n.p]=kids[n.p]||[]).push(n); } });
+
+const depth={}, levels=[];
+(function walk(id,d){ depth[id]=d; (levels[d]=levels[d]||[]).push(id); (kids[id]||[]).forEach(k=>walk(k.id,d+1)); })('root',0);
+
+const x={}, y={};
+
+/* 1) 叶子按 宽度+间距 排队 */
+let cursor=PADX;
+(function assign(id){
+  const c=kids[id]||[];
+  if(!c.length){ x[id]=cursor; cursor+=W+GAPX; return; }
+  c.forEach(k=>assign(k.id));
+  x[id]=(x[c[0].id]+x[c[c.length-1].id])/2;
+})('root');
+
+function shift(id,dx){ x[id]+=dx; (kids[id]||[]).forEach(k=>shift(k.id,dx)); }
+
+/* 2) 逐层消除重叠（左→右扫描，撞了就整棵子树右移） */
+function relaxRow(d){
+  const row=levels[d].slice().sort((a,b)=>x[a]-x[b]);
+  for(let i=1;i<row.length;i++){
+    const need=x[row[i-1]]+W+GAPX;
+    if(x[row[i]]<need) shift(row[i], need-x[row[i]]);
+  }
+}
+for(let d=0; d<levels.length; d++) relaxRow(d);
+
+/* 3) 父节点回到子节点中点，再消一次重叠 */
+for(let pass=0; pass<3; pass++){
+  for(let d=levels.length-2; d>=0; d--){
+    levels[d].forEach(id=>{
+      const c=kids[id];
+      if(c && c.length) x[id]=(x[c[0].id]+x[c[c.length-1].id])/2;
+    });
+  }
+  for(let d=0; d<levels.length; d++) relaxRow(d);
+}
+
+/* 4) 纵向 */
+for(let d=0; d<levels.length; d++) levels[d].forEach(id=>{ y[id]=PADY+d*GAPY; });
+
+const maxX=Math.max(...N.map(n=>x[n.id]))+W+PADX;
+const maxY=Math.max(...N.map(n=>y[n.id]))+H+PADY;
+
+/* ================= 渲染 ================= */
+const svg=document.getElementById('svg');
+const cam=document.getElementById('cam');
+const gEdge=document.getElementById('gEdge');
+const gNode=document.getElementById('gNode');
+const NS='http://www.w3.org/2000/svg';
+const el=(t,a={})=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+
+/* 定义箭头 */
+const defs=el('defs');
+defs.innerHTML=
+ '<marker id="arw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'+
+ '<path d="M0,0.5 L9,5 L0,9.5 z" fill="#5b6472"/></marker>';
+svg.prepend(defs);
+
+const cx = id => x[id] + W/2;      /* 节点中心横坐标 —— 所有线的锚点都取自这里 */
+const bY = id => y[id] + H;        /* 下沿 */
+const tY = id => y[id];            /* 上沿 */
+
+/* 通用曲线：从 a 的下沿中心 到 b 的上沿中心，自动生成 S 形 */
+function curvePath(a,b,bow){
+  const x1=cx(a), y1=bY(a), x2=cx(b), y2=tY(b);
+  const dy=Math.max(26, Math.abs(y2-y1)*0.52);
+  if(y2>y1){                        /* b 在下：自上而下 S 形 */
+    return `M${x1},${y1} C${x1},${y1+dy} ${x2},${y2-dy} ${x2},${y2}`;
+  }
+  /* 同层或反向：横向鼓起的弧线，避免穿过节点 */
+  const mx=(x1+x2)/2, k=bow||48;
+  return `M${x1},${y1} C${x1+k},${y1} ${x2},${y2-k} ${x2},${y2}`;
+}
+
+function addEdge(a,b,cls,arrow){
+  const g=el('g',{class:'edge'});
+  const p=el('path',{class:cls, d:curvePath(a,b)});
+  if(arrow) p.setAttribute('marker-end','url(#arw)');
+  g.append(p); g.dataset.a=a; g.dataset.b=b;
+  gEdge.append(g);
+  return g;
+}
+
+/* 层级线（父 → 子，下沿中心到上沿中心） */
+N.forEach(n=>{ if(n.p) addEdge(n.p, n.id, 'e-tree', false); });
+/* 前置线 */
+PRE.forEach(([a,b])=>addEdge(a,b,'e-pre',true));
+/* 易混线 */
+CON.forEach(([a,b])=>addEdge(a,b,'e-con',false));
+
+/* 节点 */
+function colorOf(m){
+  if(m===null) return 'var(--c0)';
+  if(m<0.25) return 'var(--c1)';
+  if(m<0.40) return 'var(--c2)';
+  if(m<0.60) return 'var(--c3)';
+  if(m<0.80) return 'var(--c4)';
+  return 'var(--c5)';
+}
+N.forEach(n=>{
+  const g=el('g',{class:'node'+(n.m===null?' dead':''),'data-id':n.id,'data-d3':depth[n.id]===3?'1':'0'});
+  const c=colorOf(n.m), x0=x[n.id], y0=y[n.id];
+  if(n.k==='s'){
+    const cut=8;
+    g.append(el('path',{
+      d:`M${x0+cut},${y0} H${x0+W-cut} L${x0+W},${y0+H/2} L${x0+W-cut},${y0+H} H${x0+cut} L${x0},${y0+H/2} Z`,
+      fill:c, stroke:'rgba(0,0,0,.15)', 'stroke-width':1
+    }));
+  }else{
+    g.append(el('rect',{x:x0,y:y0,width:W,height:H,rx:9,fill:c,
+      stroke:'rgba(0,0,0,.15)','stroke-width':1}));
+  }
+  const label = n.name.length>6 ? n.name.slice(0,6)+'…' : n.name;
+  const t=el('text',{x:x0+W/2,y:y0+H/2+4,'text-anchor':'middle'});
+  t.textContent=label; g.append(t);
+
+  if(n.m!==null){
+    const b=el('text',{x:x0+W-6,y:y0+12,'text-anchor':'end',
+      style:'font-size:9px;fill:rgba(0,0,0,.48)'});
+    b.textContent=n.m.toFixed(2); g.append(b);
+  }
+  gNode.append(g);
+});
+
+/* 给线打上"第三层"标记，折叠时一并隐藏 */
+[...gEdge.querySelectorAll('g.edge')].forEach(e=>{
+  const a=e.dataset.a, b=e.dataset.b;
+  const isD3 = depth[a]===3 || depth[b]===3;
+  if(isD3) e.dataset.d3='1';
+});
+
+/* 折叠第三层 */
+const foldBtn=document.getElementById('fold');
+function setFold(on){
+  svg.dataset.fold = on ? '1' : '0';
+  foldBtn.setAttribute('aria-pressed', String(on));
+}
+foldBtn.addEventListener('click',()=>{
+  setFold(svg.dataset.fold!=='1');
+  /* 折叠后画布变窄，回到 100% 让用户看清 */
+  requestAnimationFrame(()=>{ if(svg.dataset.fold==='1') atRoot(); });
+});
+
+/* ================= 相机：缩放 + 平移 ================= */
+let k=1, tx=0, ty=0;
+const stage=document.getElementById('stage');
+const zl=document.getElementById('zl');
+
+function applyCam(){
+  cam.setAttribute('transform',`translate(${tx},${ty}) scale(${k})`);
+  zl.textContent=Math.round(k*100)+'%';
+}
+function fit(){
+  const r=stage.getBoundingClientRect();
+  const s=Math.min(r.width/(maxX+40), r.height/(maxY+40));
+  k=Math.max(0.2, Math.min(1.6, s));
+  tx=(r.width - maxX*k)/2;
+  ty=(r.height - maxY*k)/2;
+  applyCam();
+}
+/* 默认视角：100%（或按高度适配，最多 100%），从根节点往下看 —— 建模软件的打开方式 */
+function atRoot(){
+  const r=stage.getBoundingClientRect();
+  k=Math.max(0.55, Math.min(1, r.height/(maxY+90)));
+  tx=r.width/2 - cx('root')*k;
+  ty=26;
+  applyCam();
+}
+function zoomAt(mx,my,factor){
+  const nk=Math.max(0.25, Math.min(2.6, k*factor));
+  tx = mx - (mx-tx)*(nk/k);
+  ty = my - (my-ty)*(nk/k);
+  k = nk; applyCam();
+}
+
+svg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const r=stage.getBoundingClientRect();
+  zoomAt(e.clientX-r.left, e.clientY-r.top, Math.exp(-e.deltaY*0.0016));
+},{passive:false});
+
+let drag=null;
+stage.addEventListener('pointerdown',e=>{
+  if(e.target.closest('.node')) return;
+  drag={x:e.clientX,y:e.clientY,tx,ty};
+  stage.classList.add('dragging');
+});
+window.addEventListener('pointermove',e=>{
+  if(!drag) return;
+  tx=drag.tx+(e.clientX-drag.x);
+  ty=drag.ty+(e.clientY-drag.y);
+  applyCam();
+});
+window.addEventListener('pointerup',()=>{ drag=null; stage.classList.remove('dragging'); });
+
+document.getElementById('zi').onclick=()=>{ const r=stage.getBoundingClientRect(); zoomAt(r.width/2,r.height/2,1.25); };
+document.getElementById('zo').onclick=()=>{ const r=stage.getBoundingClientRect(); zoomAt(r.width/2,r.height/2,0.8); };
+document.getElementById('zf').onclick=fit;
+document.getElementById('z1').onclick=atRoot;
+window.addEventListener('resize',()=>applyCam());
+
+/* ================= 悬停 / 点击 / 图层 ================= */
+const tip=document.getElementById('tip');
+function allEdges(){ return [...gEdge.querySelectorAll('g.edge')]; }
+function nodeEls(){ return [...gNode.querySelectorAll('.node')]; }
+
+function focusOn(id){
+  nodeEls().forEach(o=>o.classList.toggle('dim', o.dataset.id!==id));
+  allEdges().forEach(e=>e.classList.toggle('dim', !(e.dataset.a===id || e.dataset.b===id)));
+}
+function applyMode(mode){
+  svg.dataset.mode=mode;
+  document.querySelectorAll('.bar button').forEach(b=>
+    b.setAttribute('aria-pressed', String(b.dataset.mode===mode)));
+  nodeEls().forEach(o=>o.classList.remove('dim','focus'));
+  allEdges().forEach(e=>e.classList.remove('dim'));
+  if(mode==='gap' || mode==='deps'){
+    nodeEls().forEach(o=>{
+      const n=byId[o.dataset.id];
+      o.classList.toggle('dim', n.m===null || n.m>=0.6);
+    });
+  }
+}
+
+nodeEls().forEach(g=>{
+  g.addEventListener('mousemove',ev=>{
+    const n=byId[g.dataset.id];
+    const conf = n.n===0 ? '—' : Math.round(100*(1-Math.exp(-n.n/4)))+'%';
+    tip.innerHTML=`<b>${n.name}</b><div class="row">掌握分 ${n.m===null?'没测过':n.m.toFixed(2)} · 可信度 ${conf} · 做过 ${n.n} 题</div>`;
+    const r=stage.getBoundingClientRect();
+    tip.style.opacity=1;
+    tip.style.left=Math.min(ev.clientX-r.left+16, r.width-290)+'px';
+    tip.style.top=(ev.clientY-r.top+18)+'px';
+    focusOn(g.dataset.id);
+  });
+  g.addEventListener('mouseleave',()=>{
+    tip.style.opacity=0;
+    applyMode(svg.dataset.mode);
+  });
+  g.addEventListener('click',ev=>{
+    ev.stopPropagation();
+    focusOn(g.dataset.id);
+  });
+});
+stage.addEventListener('click',e=>{
+  if(!e.target.closest('.node')) applyMode(svg.dataset.mode);
+});
+document.querySelectorAll('.bar button').forEach(b=>{
+  b.addEventListener('click',()=>applyMode(b.dataset.mode));
+});
+
+/* 启动 */
+applyMode('structure');
+setFold(false);
+requestAnimationFrame(atRoot);
+setTimeout(atRoot,60);
+</script>
+</body>
+</html>

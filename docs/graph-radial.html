@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>知识地图 · 球壳分层视图（GapGraph 设计参考 v3）</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --panel:#ffffff; --ink:#1f2328; --muted:#6b7280; --line:#e5e7eb;
+    --tree:#c3c9d2; --pre:#5b6472; --con:#ef4444;
+    --c0:#dadcd9; --c1:#ef4444; --c2:#f97316; --c3:#eab308; --c4:#86efac; --c5:#22c55e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);overflow:hidden;
+       font:14px/1.55 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{padding:12px 20px 8px;border-bottom:1px solid var(--line);background:var(--panel)}
+  h1{margin:0 0 2px;font-size:15px;font-weight:650}
+  .sub{color:var(--muted);font-size:12.5px}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 20px;
+       border-bottom:1px solid var(--line);background:var(--panel)}
+  .bar button{font:inherit;font-size:13px;padding:5px 13px;border-radius:999px;cursor:pointer;
+       border:1px solid var(--line);background:#fff;color:var(--ink);transition:.15s}
+  .bar button:hover{border-color:#b9bec7}
+  .bar button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .zoom{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:2px 4px;background:#fff}
+  .zoom button{border:0;background:transparent;padding:2px 8px;border-radius:999px;font-size:14px;line-height:1;cursor:pointer}
+  .zoom button:hover{background:#f0f1f3}
+  .zoom span{font-size:12px;color:var(--muted);min-width:42px;text-align:center}
+  .sep{flex:1}
+  .legend{display:flex;gap:13px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-items:center}
+  .lg{display:flex;gap:5px;align-items:center;white-space:nowrap}
+  .sw{width:11px;height:11px;border-radius:50%;border:1px solid rgba(0,0,0,.12)}
+  .ln{width:20px;height:0;border-top:2px solid var(--tree)}
+  .ln.pre{border-top:2px dashed var(--pre)}
+  .ln.con{border-top:2px dotted var(--con)}
+  #stage{position:relative;height:calc(100% - 118px);overflow:hidden;cursor:grab;background:
+    radial-gradient(circle at 50% 46%, #ffffff 0%, #f4f5f4 55%, #eceeec 100%)}
+  #stage.dragging{cursor:grabbing}
+  svg{display:block;width:100%;height:100%;font-family:inherit}
+  svg[data-mode="structure"] .e-pre,svg[data-mode="structure"] .e-con{display:none}
+  svg[data-mode="gap"] .e-con{display:none}
+  svg[data-mode="gap"] .node.dim{opacity:.18}
+  svg[data-mode="deps"] .e-tree{opacity:.12}
+  svg[data-mode="deps"] .node.dim{opacity:.28}
+  svg[data-fold="1"] [data-d3="1"]{display:none}
+  .node{cursor:pointer;transition:opacity .15s}
+  .node.dim{opacity:.42}
+  .node text{fill:#1f2328;pointer-events:none;user-select:none;text-anchor:middle;dominant-baseline:middle}
+  .node.dead text{fill:#83888f}
+  .ring{fill:none;stroke:#dfe3e6;stroke-width:1;stroke-dasharray:3 6}
+  .ringlab{font-size:10px;fill:#b6bcc4;letter-spacing:.5px}
+  .e-tree{stroke:var(--tree);stroke-width:1.7;fill:none;stroke-linecap:round}
+  .e-pre{stroke:var(--pre);stroke-width:1.5;stroke-dasharray:6 5;fill:none;stroke-linecap:round}
+  .e-con{stroke:var(--con);stroke-width:1.7;stroke-dasharray:1.5 5;stroke-linecap:round;fill:none}
+  g.edge.dim{opacity:.10}
+  #tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .12s;
+       background:#1f2328;color:#fff;padding:8px 11px;border-radius:8px;font-size:12.5px;
+       max-width:270px;line-height:1.6;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:9}
+  #tip b{font-weight:650}
+  #tip .row{color:#c9ced6;font-size:11.5px}
+  footer{padding:8px 20px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);background:var(--panel)}
+  kbd{background:#eef0f2;border-radius:4px;padding:1px 5px;font-size:11px;font-family:inherit}
+</style>
+</head>
+<body>
+<header>
+  <h1>知识地图 · 高中「函数」板块（42 节点）· 同心圈层（正视）</h1>
+  <div class="sub">中心是根，每向外一圈是一层；叶子角度均分（11.6°/叶），永远不会挤在一起。</div>
+</header>
+
+<div class="bar">
+  <button data-mode="structure" aria-pressed="true">① 结构</button>
+  <button data-mode="gap" aria-pressed="false">② 缺口</button>
+  <button data-mode="deps" aria-pressed="false">③ 依赖 · 易混</button>
+  <button id="fold" aria-pressed="false">折叠第三层</button>
+
+  <div class="zoom">
+    <button id="zo" title="缩小">−</button>
+    <span id="zl">100%</span>
+    <button id="zi" title="放大">＋</button>
+    <button id="zf" title="缩到能看全部" style="font-size:12px">全览</button>
+    <button id="z1" title="回到 100%" style="font-size:12px">100%</button>
+  </div>
+
+  <span class="sep"></span>
+  <div class="legend">
+    <span class="lg"><i class="sw" style="background:var(--c1)"></i>塌了</span>
+    <span class="lg"><i class="sw" style="background:var(--c2)"></i>不稳</span>
+    <span class="lg"><i class="sw" style="background:var(--c3)"></i>勉强</span>
+    <span class="lg"><i class="sw" style="background:var(--c5)"></i>稳</span>
+    <span class="lg"><i class="sw" style="background:var(--c0)"></i>没测过</span>
+    <span class="lg"><i class="ln"></i>层级</span>
+    <span class="lg"><i class="ln pre"></i>前置</span>
+    <span class="lg"><i class="ln con"></i>易混</span>
+  </div>
+</div>
+
+<div id="stage">
+  <svg id="svg" data-mode="structure" data-fold="0">
+    <defs>
+      <marker id="arw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+        <path d="M0,0.5 L9,5 L0,9.5 z" fill="#5b6472"></path>
+      </marker>
+    </defs>
+    <g id="cam"><g id="gRing"></g><g id="gEdge"></g><g id="gNode"></g></g>
+  </svg>
+  <div id="tip"></div>
+</div>
+
+<footer>
+  <span id="selftest" style="font-weight:600"></span>
+  <span style="margin:0 8px;color:var(--line)">|</span>
+  <kbd>滚轮</kbd> 缩放 · <kbd>拖拽</kbd> 平移 · <kbd>点节点</kbd> 只看它的上下游 · <kbd>点空白</kbd> 复位
+</footer>
+
+<script>
+/* ================= 数据 ================= */
+const N = [
+  {id:'root', name:'函数',        p:null,  k:'c', m:0.62, n:28},
+  {id:'A', name:'函数概念',        p:'root',k:'c', m:0.71, n:12},
+  {id:'B', name:'函数性质',        p:'root',k:'c', m:0.66, n:15},
+  {id:'C', name:'基本初等函数',    p:'root',k:'c', m:0.34, n:22},
+  {id:'D', name:'函数应用',        p:'root',k:'c', m:0.52, n:5},
+  {id:'A1',name:'定义',           p:'A',   k:'c', m:0.82, n:4},
+  {id:'A2',name:'定义域',          p:'A',   k:'c', m:0.72, n:9},
+  {id:'A3',name:'值域',           p:'A',   k:'c', m:0.22, n:6},
+  {id:'A5',name:'分段函数',        p:'A',   k:'c', m:0.58, n:3},
+  {id:'A2a',name:'分式',          p:'A2',  k:'c', m:0.80, n:3},
+  {id:'A2b',name:'根式',          p:'A2',  k:'c', m:0.74, n:3},
+  {id:'A2c',name:'对数真数',       p:'A2',  k:'c', m:0.36, n:4},
+  {id:'A2d',name:'实际约束',       p:'A2',  k:'c', m:null, n:0},
+  {id:'B1',name:'单调性',          p:'B',   k:'c', m:0.78, n:8},
+  {id:'B2',name:'奇偶性',          p:'B',   k:'c', m:0.64, n:5},
+  {id:'B3',name:'周期性',          p:'B',   k:'c', m:0.55, n:3},
+  {id:'B4',name:'对称性',          p:'B',   k:'c', m:0.31, n:5},
+  {id:'B5',name:'最值',           p:'B',   k:'c', m:0.34, n:7},
+  {id:'B6',name:'零点存在',        p:'B',   k:'c', m:0.58, n:4},
+  {id:'B1a',name:'定义法证明',     p:'B1',  k:'s', m:0.70, n:3},
+  {id:'B1b',name:'复合单调',       p:'B1',  k:'s', m:0.45, n:5},
+  {id:'C1',name:'指数函数',        p:'C',   k:'c', m:0.24, n:9},
+  {id:'C2',name:'对数函数',        p:'C',   k:'c', m:0.31, n:10},
+  {id:'C3',name:'幂函数',          p:'C',   k:'c', m:null, n:0},
+  {id:'C4',name:'图像变换',        p:'C',   k:'c', m:0.47, n:4},
+  {id:'C5',name:'反函数',          p:'C',   k:'c', m:null, n:0},
+  {id:'C1a',name:'底数分类',       p:'C1',  k:'c', m:0.28, n:4},
+  {id:'C1b',name:'单调性判断',     p:'C1',  k:'s', m:0.33, n:3},
+  {id:'C1c',name:'比较大小',       p:'C1',  k:'s', m:0.38, n:6},
+  {id:'C1d',name:'过定点',         p:'C1',  k:'c', m:0.72, n:2},
+  {id:'C1e',name:'指数方程',       p:'C1',  k:'s', m:null, n:0},
+  {id:'C2a',name:'对数运算',       p:'C2',  k:'c', m:0.42, n:6},
+  {id:'C2b',name:'换底公式',       p:'C2',  k:'s', m:0.51, n:3},
+  {id:'C2c',name:'定义域',         p:'C2',  k:'c', m:0.36, n:4},
+  {id:'C2d',name:'比较大小',       p:'C2',  k:'s', m:0.29, n:5},
+  {id:'C2e',name:'对数方程',       p:'C2',  k:'s', m:null, n:0},
+  {id:'C3a',name:'五个幂函数',     p:'C3',  k:'c', m:null, n:0},
+  {id:'C3b',name:'幂函数性质',     p:'C3',  k:'c', m:null, n:0},
+  {id:'C4a',name:'平移',          p:'C4',  k:'c', m:0.55, n:2},
+  {id:'C4b',name:'伸缩',          p:'C4',  k:'c', m:0.44, n:2},
+  {id:'D1',name:'函数建模',        p:'D',   k:'c', m:null, n:0},
+  {id:'D2',name:'零点与方程',      p:'D',   k:'c', m:0.52, n:5}
+];
+const PRE = [['A1','B1'],['A2','C2'],['A3','B5'],['B1','C1'],['B1','C2'],
+             ['B1a','B1b'],['C2','C1c'],['C2a','C2d'],['B6','D2']];
+const CON = [['C1','C2'],['C3','C1'],['B2','B4'],['C1c','C2d']];
+
+/* ================= 球壳参数 ================= */
+const RING = [0, 175, 350, 510];      /* 每层半径 */
+const RC   = [32, 26, 20, 19];        /* 每层圆半径 */
+const TILT = 1;                        /* 正视：正圆同心圈层（球壳视角已移除） */
+
+const byId={}, kids={};
+N.forEach(n=>{ byId[n.id]=n; if(n.p)(kids[n.p]=kids[n.p]||[]).push(n); });
+const depth={}, levels=[];
+(function walk(id,d){ depth[id]=d;(levels[d]=levels[d]||[]).push(id);(kids[id]||[]).forEach(k=>walk(k.id,d+1)); })('root',0);
+
+/* 每棵子树占多少个叶子 → 决定它拿到多少角度 */
+const span={}; let lc=0;
+(function post(id){
+  const c=kids[id]||[];
+  if(!c.length){ span[id]=[lc,lc]; lc++; return; }
+  c.forEach(k=>post(k.id));
+  span[id]=[span[c[0].id][0], span[c[c.length-1].id][1]];
+})('root');
+const LEAVES=lc;
+const STEP=360/LEAVES;
+const ang={};
+N.forEach(n=>{ ang[n.id] = -90 + ((span[n.id][0]+span[n.id][1])/2 + 0.5)*STEP; });
+
+const OUT = RING[3]+RC[3]+72;
+const CW = OUT*2, CH = OUT*2*TILT + 40;
+const CX = CW/2, CY = CH/2;
+
+function pos(id){
+  const d=Math.min(depth[id],3), r=RING[d], a=ang[id]*Math.PI/180;
+  return [CX + r*Math.cos(a), CY + r*Math.sin(a)*TILT];
+}
+const rr = id => RC[Math.min(depth[id],3)];
+
+/* ================= 绘制 ================= */
+const svg=document.getElementById('svg');
+const cam=document.getElementById('cam');
+const gRing=document.getElementById('gRing');
+const gEdge=document.getElementById('gEdge');
+const gNode=document.getElementById('gNode');
+const NS='http://www.w3.org/2000/svg';
+const el=(t,a={})=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+
+function colorOf(m){
+  if(m===null) return 'var(--c0)';
+  if(m<0.25) return 'var(--c1)';
+  if(m<0.40) return 'var(--c2)';
+  if(m<0.60) return 'var(--c3)';
+  if(m<0.80) return 'var(--c4)';
+  return 'var(--c5)';
+}
+function wrap(name, per){
+  if(name.length<=per) return [name];
+  if(name.length<=per*2) return [name.slice(0,per), name.slice(per)];
+  return [name.slice(0,per), name.slice(per, per*2-1)+'…'];
+}
+
+/* 树线：沿壳层螺旋走出，两端再收缩到父/子圆的圆周上 —— 保证严丝合缝 */
+function spiral(a,b){
+  const da=Math.min(depth[a],3), db=Math.min(depth[b],3);
+  const t1=ang[a], t2=ang[b];
+  const SEG=22, pts=[];
+  for(let i=0;i<=SEG;i++){
+    const t=i/SEG;
+    const r=RING[da]+(RING[db]-RING[da])*t;
+    const th=(t1+(t2-t1)*t)*Math.PI/180;
+    pts.push([CX+r*Math.cos(th), CY+r*Math.sin(th)*TILT]);
+  }
+  const trim=(p0,p1,rad)=>{
+    const dx=p1[0]-p0[0], dy=p1[1]-p0[1], L=Math.hypot(dx,dy)||1;
+    return [p0[0]+dx/L*rad, p0[1]+dy/L*rad];
+  };
+  const pa=pos(a), pb=pos(b);
+  pts[0]=trim(pa, pts[1], RC[da]);
+  pts[pts.length-1]=trim(pb, pts[pts.length-2], RC[db]);
+  return 'M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L');
+}
+/* 跨支路的线：两端各沿连线方向退到圆周上 */
+function chord(a,b,bowTowardCenter){
+  const pa=pos(a), pb=pos(b);
+  let dx=pb[0]-pa[0], dy=pb[1]-pa[1];
+  const L=Math.hypot(dx,dy)||1;
+  const p1=[pa[0]+dx/L*rr(a), pa[1]+dy/L*rr(a)];
+  const p2=[pb[0]-dx/L*rr(b), pb[1]-dy/L*rr(b)];
+  let ctrl=[(p1[0]+p2[0])/2,(p1[1]+p2[1])/2];
+  if(bowTowardCenter){
+    ctrl=[ctrl[0]+(CX-ctrl[0])*0.42, ctrl[1]+(CY-ctrl[1])*0.42];
+  }
+  return `M${p1[0]},${p1[1]} Q${ctrl[0]},${ctrl[1]} ${p2[0]},${p2[1]}`;
+}
+
+/* 统一的画线入口：路径字符串由调用方给，data-a/data-b 用于悬停高亮 */
+function makeEdge(a,b,cls,path,arrow){
+  const isD3 = depth[a]===3 || depth[b]===3;
+  const g=el('g',{class:'edge'+(isD3?' d3':''),'data-a':a,'data-b':b,'data-d3':isD3?'1':'0'});
+  const p=el('path',{class:cls, d:path});
+  if(arrow) p.setAttribute('marker-end','url(#arw)');
+  g.append(p); gEdge.append(g);
+  return g;
+}
+
+function render(){
+  gRing.innerHTML=''; gEdge.innerHTML=''; gNode.innerHTML='';
+
+  /* 壳层圈 + 标注 */
+  for(let d=1; d<=3; d++){
+    gRing.append(el('ellipse',{class:'ring',cx:CX,cy:CY,rx:RING[d],ry:RING[d]*TILT}));
+    const lb=el('text',{class:'ringlab',x:CX+RING[d]+6,y:CY+3});
+    lb.textContent = ['','L1 板块','L2 考点','L3 方法'][d];
+    gRing.append(lb);
+  }
+
+  /* 三种线：树线走螺旋，跨支路线走朝圆心的弧 */
+  N.forEach(n=>{ if(n.p) makeEdge(n.p, n.id, 'e-tree', spiral(n.p, n.id), false); });
+  CON.forEach(([a,b])=>makeEdge(a, b, 'e-con', chord(a,b,false), false));
+  PRE.forEach(([a,b])=>makeEdge(a, b, 'e-pre', chord(a,b,true), true));
+
+  /* 节点 */
+  N.forEach(n=>{
+    const d=Math.min(depth[n.id],3);
+    const [px,py]=pos(n.id), R=RC[d];
+    const g=el('g',{class:'node'+(n.m===null?' dead':''),
+      'data-id':n.id,'data-d3':depth[n.id]===3?'1':'0'});
+    g.append(el('circle',{cx:px,cy:py,r:R,fill:colorOf(n.m),
+      stroke:'rgba(0,0,0,.14)','stroke-width':1}));
+    /* 题型节点加一圈细虚线，表示"这是方法不是概念" */
+    if(n.k==='s'){
+      g.append(el('circle',{cx:px,cy:py,r:R+3.5,fill:'none',
+        stroke:'rgba(0,0,0,.22)','stroke-width':1,'stroke-dasharray':'2 3'}));
+    }
+    const per = [2,4,3,3][d];
+    const fs  = [13,10.5,9.5,9][d];
+    const lines=wrap(n.name, per);
+    const lh = fs+2.2;
+    const y0 = py - (lines.length-1)*lh/2;
+    lines.forEach((s,i)=>{
+      const t=el('text',{x:px,y:y0+i*lh,style:`font-size:${fs}px`});
+      t.textContent=s; g.append(t);
+    });
+    if(n.m!==null && R>=20){
+      const b=el('text',{x:px,y:py+R-4,style:`font-size:8px;fill:rgba(0,0,0,.42)`});
+      b.textContent=n.m.toFixed(2); g.append(b);
+    }
+    gNode.append(g);
+  });
+
+  bindNodes();
+  applyMode(svg.dataset.mode);
+  selfTest();
+}
+
+/* 自检：不信任"看起来有"，逐条验证路径真的生成了 */
+function selfTest(){
+  const paths=[...gEdge.querySelectorAll('path')];
+  let bad=0;
+  paths.forEach(p=>{
+    const d=p.getAttribute('d')||'';
+    const pairs=(d.match(/-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?/g)||[]).length;
+    if(!/^M-?\d/.test(d) || pairs<2) bad++;
+  });
+  const tree=gEdge.querySelectorAll('.e-tree').length;
+  const pre=gEdge.querySelectorAll('.e-pre').length;
+  const con=gEdge.querySelectorAll('.e-con').length;
+  const expTree=N.filter(n=>n.p).length;
+  const ok = bad===0 && tree===expTree && pre===PRE.length && con===CON.length;
+  const box=document.getElementById('selftest');
+  box.textContent = ok
+    ? `自检 ✔ 层级线 ${tree} 条 · 前置 ${pre} 条 · 易混 ${con} 条，路径全部有效`
+    : `自检 ✘ 期望 层级${expTree}/实际${tree}、前置${PRE.length}/${pre}、易混${CON.length}/${con}，无效路径 ${bad} 条`;
+  box.style.color = ok ? '#16a34a' : '#dc2626';
+}
+
+/* ================= 相机 ================= */
+let k=1, tx=0, ty=0;
+const stage=document.getElementById('stage');
+const zl=document.getElementById('zl');
+function applyCam(){ cam.setAttribute('transform',`translate(${tx},${ty}) scale(${k})`); zl.textContent=Math.round(k*100)+'%'; }
+function fit(){
+  const r=stage.getBoundingClientRect();
+  const s=Math.min(r.width/CW, r.height/CH);
+  k=Math.max(0.18, Math.min(1.6, s));
+  tx=(r.width - CW*k)/2; ty=(r.height - CH*k)/2; applyCam();
+}
+function center(){ const r=stage.getBoundingClientRect();
+  k=Math.max(0.5, Math.min(1, r.height/CH));
+  tx=r.width/2 - CX*k; ty=r.height/2 - CY*k; applyCam(); }
+function zoomAt(mx,my,f){
+  const nk=Math.max(0.18, Math.min(2.8, k*f));
+  tx=mx-(mx-tx)*(nk/k); ty=my-(my-ty)*(nk/k); k=nk; applyCam();
+}
+svg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const r=stage.getBoundingClientRect();
+  zoomAt(e.clientX-r.left, e.clientY-r.top, Math.exp(-e.deltaY*0.0016));
+},{passive:false});
+
+let drag=null;
+stage.addEventListener('pointerdown',e=>{
+  if(e.target.closest('.node')) return;
+  drag={x:e.clientX,y:e.clientY,tx,ty}; stage.classList.add('dragging');
+});
+window.addEventListener('pointermove',e=>{
+  if(!drag) return;
+  tx=drag.tx+(e.clientX-drag.x); ty=drag.ty+(e.clientY-drag.y); applyCam();
+});
+window.addEventListener('pointerup',()=>{ drag=null; stage.classList.remove('dragging'); });
+document.getElementById('zi').onclick=()=>{const r=stage.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1.25);};
+document.getElementById('zo').onclick=()=>{const r=stage.getBoundingClientRect();zoomAt(r.width/2,r.height/2,0.8);};
+document.getElementById('zf').onclick=fit;
+document.getElementById('z1').onclick=center;
+window.addEventListener('resize',()=>applyCam());
+
+/* ================= 交互 ================= */
+const tip=document.getElementById('tip');
+const nodeEls=()=>[...gNode.querySelectorAll('.node')];
+const allEdges=()=>[...gEdge.querySelectorAll('g.edge')];
+
+function focusOn(id){
+  nodeEls().forEach(o=>o.classList.toggle('dim', o.dataset.id!==id));
+  allEdges().forEach(e=>e.classList.toggle('dim', !(e.dataset.a===id||e.dataset.b===id)));
+}
+function applyMode(mode){
+  svg.dataset.mode=mode;
+  document.querySelectorAll('.bar button[data-mode]').forEach(b=>
+    b.setAttribute('aria-pressed', String(b.dataset.mode===mode)));
+  nodeEls().forEach(o=>o.classList.remove('dim'));
+  allEdges().forEach(e=>e.classList.remove('dim'));
+  if(mode==='gap'||mode==='deps'){
+    nodeEls().forEach(o=>{
+      const n=byId[o.dataset.id];
+      o.classList.toggle('dim', n.m===null || n.m>=0.6);
+    });
+  }
+}
+function bindNodes(){
+  nodeEls().forEach(g=>{
+    g.addEventListener('mousemove',ev=>{
+      const n=byId[g.dataset.id];
+      const conf = n.n===0 ? '—' : Math.round(100*(1-Math.exp(-n.n/4)))+'%';
+      tip.innerHTML=`<b>${n.name}</b><div class="row">掌握分 ${n.m===null?'没测过':n.m.toFixed(2)} · 可信度 ${conf} · 做过 ${n.n} 题</div>`;
+      const r=stage.getBoundingClientRect();
+      tip.style.opacity=1;
+      tip.style.left=Math.min(ev.clientX-r.left+16, r.width-290)+'px';
+      tip.style.top=(ev.clientY-r.top+18)+'px';
+      focusOn(g.dataset.id);
+    });
+    g.addEventListener('mouseleave',()=>{ tip.style.opacity=0; applyMode(svg.dataset.mode); });
+    g.addEventListener('click',ev=>{ ev.stopPropagation(); focusOn(g.dataset.id); });
+  });
+}
+stage.addEventListener('click',e=>{ if(!e.target.closest('.node')) applyMode(svg.dataset.mode); });
+
+document.querySelectorAll('.bar button[data-mode]').forEach(b=>{
+  b.addEventListener('click',()=>applyMode(b.dataset.mode));
+});
+document.getElementById('fold').addEventListener('click',e=>{
+  const on = svg.dataset.fold!=='1';
+  svg.dataset.fold = on?'1':'0';
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+});
+/* 启动 */
+render();
+requestAnimationFrame(fit);
+setTimeout(fit,60);
+</script>
+</body>
+</html>
