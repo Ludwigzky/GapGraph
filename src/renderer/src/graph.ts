@@ -1,20 +1,12 @@
 import type { KNode, Mastery, Relation } from '../../shared/types'
 import { masteryScore } from '../../shared/mastery'
-import {
-  forceStep,
-  measureLabel,
-  separateBoxes,
-  type ForceEdge,
-  type ForceNode,
-  type LabelMetrics
-} from '../../main/domain/layout'
+import { forceStep, separateBoxes, textWidth, type ForceEdge, type ForceNode } from '../../main/domain/layout'
 
 export type GraphMode = 'structure' | 'gap'
 
 const NS = 'http://www.w3.org/2000/svg'
 
-/** 逻辑画布：节点坐标都在这个空间里，缩放平移由相机负责。
- *  尺寸按节点数自适应——固定大画布会让 fit() 缩得太小，字就看不见了。 */
+/** 逻辑画布：按节点数自适应，避免 fit 之后字缩成蚂蚁 */
 let W = 1000
 let H = 660
 
@@ -27,8 +19,11 @@ const COLOR: Record<string, string> = {
   unmeasured: 'var(--c0)'
 }
 
-/** 深色底用白字，浅色底用深字——避免黄底白字看不清 */
-const LIGHT_FILL = new Set([COLOR.yellow, COLOR.unmeasured])
+const LABEL_FONT = 12.5
+const LABEL_GAP = 7
+const MAX_LABEL_W = 132
+const DOT_R = 7
+const ROOT_R = 10
 
 function bandOf(m: Mastery | undefined, now: number): string {
   if (!m || (m.n === 0 && m.K === 0)) return 'unmeasured'
@@ -39,6 +34,20 @@ function bandOf(m: Mastery | undefined, now: number): string {
   return 'green'
 }
 
+/** 文字太长就截断加省略号——标签只做"认得出"，完整名字在右栏 */
+function fitLabel(name: string): string {
+  const raw = [...String(name ?? '')]
+  const chars = raw.length ? raw : ['?']
+  let out = ''
+  for (const ch of chars) {
+    if (textWidth(out + ch, LABEL_FONT) > MAX_LABEL_W - LABEL_FONT) {
+      return out + '…'
+    }
+    out += ch
+  }
+  return out
+}
+
 function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
   const e = document.createElementNS(NS, tag)
   for (const k in attrs) e.setAttribute(k, String(attrs[k]))
@@ -47,14 +56,24 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
 
 export interface GraphHandlers {
   onSelect: (id: string | null) => void
-  /** 用户拖动结束：把位置存下来，下次打开还在原地 */
   onMoveNode?: (id: string, x: number, y: number) => void
 }
 
+/**
+ * 一个节点 = 一个小圆点 + 旁边一行字。
+ * 碰撞箱不是圆点本身，而是"圆点 + 文字"的整体矩形——
+ * 否则字会互相压，那比圆点重叠更难读。
+ */
 interface NodeBox extends ForceNode {
   id: string
-  metrics: LabelMetrics
   node: KNode
+  label: string
+  /** 圆点半径 */
+  r: number
+  /** 碰撞箱中心到圆点的水平偏移（文字在右侧，所以是正数） */
+  dx: number
+  /** 文字宽度 */
+  labelW: number
 }
 
 interface EdgeSpec {
@@ -69,7 +88,6 @@ export class KnowledgeGraph {
   private cam: SVGGElement
   private gEdge: SVGGElement
   private gNode: SVGGElement
-  private gLabel: SVGGElement
 
   private nodes: KNode[] = []
   private boxes = new Map<string, NodeBox>()
@@ -88,7 +106,7 @@ export class KnowledgeGraph {
   private dragNode: { id: string; grabX: number; grabY: number } | null = null
   private panFrom: { x: number; y: number; tx: number; ty: number } | null = null
   private downAt: { x: number; y: number } | null = null
-  private edgeEls: { spec: EdgeSpec; line: SVGLineElement | SVGPathElement }[] = []
+  private edgeEls: { spec: EdgeSpec; line: SVGLineElement }[] = []
 
   constructor(svg: SVGSVGElement, handlers: GraphHandlers) {
     this.svg = svg
@@ -96,12 +114,11 @@ export class KnowledgeGraph {
     this.cam = el('g')
     this.gEdge = el('g')
     this.gNode = el('g')
-    this.gLabel = el('g')
     const defs = el('defs')
     defs.innerHTML =
       '<marker id="arw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0.5 L9,5 L0,9.5 z" fill="#5b6472"/></marker>'
     this.svg.append(defs, this.cam)
-    this.cam.append(this.gEdge, this.gNode, this.gLabel)
+    this.cam.append(this.gEdge, this.gNode)
 
     this.svg.addEventListener('wheel', this.onWheel, { passive: false })
     this.svg.addEventListener('pointerdown', this.onDown)
@@ -129,21 +146,17 @@ export class KnowledgeGraph {
     this.render()
   }
 
-  /** 画布按节点数缩放：节点少时画布小，fit 之后字才不会缩成蚂蚁 */
   private resizeCanvas(n: number): void {
     const area = Math.max(1, n) * 9000
-    const w = Math.round(Math.max(880, Math.sqrt(area * 1.55)))
-    W = w
-    H = Math.round(w / 1.55)
+    W = Math.round(Math.max(880, Math.sqrt(area * 1.55)))
+    H = Math.round(W / 1.55)
   }
 
   private buildEdges(nodes: KNode[], relations: Relation[]): EdgeSpec[] {
     const ids = new Set(nodes.map((n) => n.id))
     const out: EdgeSpec[] = []
     const seen = new Set<string>()
-    for (const n of nodes) {
-      if (n.parentId && ids.has(n.parentId)) out.push({ a: n.parentId, b: n.id, kind: 'tree' })
-    }
+    for (const n of nodes) if (n.parentId && ids.has(n.parentId)) out.push({ a: n.parentId, b: n.id, kind: 'tree' })
     for (const r of relations) {
       if (!ids.has(r.a) || !ids.has(r.b)) continue
       const key = `${r.kind}:${[r.a, r.b].sort().join('|')}`
@@ -154,7 +167,6 @@ export class KnowledgeGraph {
     return out
   }
 
-  /** 深度（用于折叠）与测量 */
   private depthOf(id: string): number {
     const byId = new Map(this.nodes.map((n) => [n.id, n]))
     let cur = byId.get(id)
@@ -174,84 +186,89 @@ export class KnowledgeGraph {
     return this.nodes.filter((n) => n.kind === 'root' || this.depthOf(n.id) <= 2)
   }
 
+  /** 量出"圆点 + 文字"的整体碰撞箱 */
   private measure(): void {
     for (const n of this.nodes) {
-      const isRoot = n.kind === 'root'
-      const m = measureLabel(n.name, {
-        font: isRoot ? 14 : 12.5,
-        maxWidth: isRoot ? 14 * 8 : 12.5 * 7,
-        maxLines: 3,
-        padX: isRoot ? 13 : 10,
-        padY: isRoot ? 9 : 7,
-        minW: isRoot ? 74 : 46,
-        minH: isRoot ? 40 : 30
-      })
+      const r = n.kind === 'root' ? ROOT_R : DOT_R
+      const label = fitLabel(n.name)
+      const labelW = textWidth(label, LABEL_FONT)
+      const boxW = r * 2 + LABEL_GAP + labelW + 8
+      const boxH = Math.max(r * 2 + 8, LABEL_FONT * 1.6)
+      const dx = boxW / 2 - r
       const old = this.boxes.get(n.id)
       this.boxes.set(n.id, {
         id: n.id,
         node: n,
-        metrics: m,
+        label,
+        r,
+        dx,
+        labelW,
         x: old?.x ?? 0,
         y: old?.y ?? 0,
-        w: m.boxW,
-        h: m.boxH,
+        w: boxW,
+        h: boxH,
         vx: 0,
         vy: 0,
         pinned: old?.pinned
       })
     }
-    // 清掉已经不存在的节点
     for (const id of [...this.boxes.keys()]) if (!this.nodes.some((n) => n.id === id)) this.boxes.delete(id)
   }
 
-  /** 首次布局：先按圆环撒点（不是最终位置，只给力导向一个初始形状），再模拟 */
-  private layout(iterations = 320): void {
+  private physicsEdges(visIds: Set<string>): ForceEdge[] {
+    return this.edges
+      .filter((e) => visIds.has(e.a) && visIds.has(e.b))
+      .map((e) => ({ a: e.a, b: e.b, strength: e.kind === 'tree' ? 2.4 : 0.6 }))
+  }
+
+  private listOfVisible(): NodeBox[] {
+    return this.visibleNodes()
+      .map((n) => this.boxes.get(n.id))
+      .filter((b): b is NodeBox => !!b)
+  }
+
+  private layout(iterations = 340): void {
     const vis = this.visibleNodes()
-    const visIds = new Set(vis.map((n) => n.id))
     const list: NodeBox[] = []
     vis.forEach((n, i) => {
       const b = this.boxes.get(n.id)
       if (!b) return
       if (b.x === 0 && b.y === 0) {
         const ring = n.kind === 'root' ? 0 : this.depthOf(n.id)
-        const r = 60 + ring * Math.min(W, H) * 0.16
+        const rad = 60 + ring * Math.min(W, H) * 0.16
         const a = (i / Math.max(1, vis.length)) * Math.PI * 2 + ring * 0.6
-        b.x = W / 2 + Math.cos(a) * r
-        b.y = H / 2 + Math.sin(a) * r
+        b.x = W / 2 + Math.cos(a) * rad
+        b.y = H / 2 + Math.sin(a) * rad
       }
       list.push(b)
     })
-
-    // 结构边拉得更紧，父子才会成簇；关系边轻一点，只做轻微牵引
-    const edges: ForceEdge[] = this.edges
-      .filter((e) => visIds.has(e.a) && visIds.has(e.b))
-      .map((e) => ({ a: e.a, b: e.b, strength: e.kind === 'tree' ? 2.2 : 0.7 }))
-
-    const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.55
+    if (!list.length) return
+    const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
+    const ideal = Math.sqrt((W * H) / list.length) * 0.5
     for (let i = 0; i < iterations; i++) {
       forceStep(list, edges, { w: W, h: H, ideal })
-      if (i % 24 === 0) separateBoxes(list, 16, 6)
+      if (i % 20 === 0) separateBoxes(list, 14, 6)
     }
-    separateBoxes(list, 18, 30)
+    separateBoxes(list, 16, 40)
   }
 
-  /** 用户拖过的位置：直接钉住，并且让邻居重新排一次 */
   setPositions(pos: Record<string, [number, number]>): void {
     let any = false
     for (const [id, [x, y]] of Object.entries(pos ?? {})) {
       const b = this.boxes.get(id)
       if (!b) continue
-      b.x = x
+      // 存的是圆点坐标，碰撞箱中心要加回偏移
+      b.x = x + b.dx
       b.y = y
       b.pinned = true
       any = true
     }
     if (any) {
-      const vis = this.visibleNodes().map((n) => this.boxes.get(n.id)).filter(Boolean) as NodeBox[]
-      const edges = this.edges.map((e) => ({ a: e.a, b: e.b, strength: e.kind === 'tree' ? 2.2 : 0.7 }))
-      const ideal = Math.sqrt((W * H) / Math.max(1, vis.length)) * 0.55
-      for (let i = 0; i < 80; i++) forceStep(vis, edges, { w: W, h: H, ideal })
-      separateBoxes(vis, 18, 24)
+      const list = this.listOfVisible()
+      const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
+      const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.5
+      for (let i = 0; i < 70; i++) forceStep(list, edges, { w: W, h: H, ideal })
+      separateBoxes(list, 16, 24)
       this.render()
     }
   }
@@ -278,7 +295,10 @@ export class KnowledgeGraph {
       const b = this.boxes.get(id)
       if (b) {
         const p = this.toGraph(e.clientX, e.clientY)
-        this.dragNode = { id, grabX: p.x - b.x, grabY: p.y - b.y }
+        // 抓的是圆点，不是碰撞箱中心
+        const dotX = b.x - b.dx
+        this.dragNode = { id, grabX: p.x - dotX, grabY: p.y - b.y }
+        b.pinned = true
         nodeEl.classList.add('dragging')
       }
       return
@@ -291,10 +311,13 @@ export class KnowledgeGraph {
       const b = this.boxes.get(this.dragNode.id)
       if (!b) return
       const p = this.toGraph(e.clientX, e.clientY)
-      b.x = Math.max(b.w / 2, Math.min(W - b.w / 2, p.x - this.dragNode.grabX))
-      b.y = Math.max(b.h / 2, Math.min(H - b.h / 2, p.y - this.dragNode.grabY))
-      this.moveNodeEl(b)
-      this.updateEdgesFor(b.id)
+      const dotX = Math.max(b.r, Math.min(W - b.r, p.x - this.dragNode.grabX))
+      const dotY = Math.max(b.h / 2, Math.min(H - b.h / 2, p.y - this.dragNode.grabY))
+      b.x = dotX + b.dx
+      b.y = dotY
+      // 拖的同时让周围实时让开——这是"碰撞箱"的手感来源
+      this.relaxAround(b.id)
+      this.syncAll()
       return
     }
     if (!this.panFrom) return
@@ -310,21 +333,19 @@ export class KnowledgeGraph {
       this.dragNode = null
       this.gNode.querySelector('.dragging')?.classList.remove('dragging')
       if (b) {
-        b.pinned = true
-        this.handlers.onMoveNode?.(id, Math.round(b.x), Math.round(b.y))
-        // 抖一下邻居，让它"让开"——拖完不是硬邦邦挪走一块
-        const vis = this.visibleNodes().map((n) => this.boxes.get(n.id)).filter(Boolean) as NodeBox[]
-        const edges = this.edges.map((x) => ({ a: x.a, b: x.b, strength: x.kind === 'tree' ? 2.2 : 0.7 }))
-        const ideal = Math.sqrt((W * H) / Math.max(1, vis.length)) * 0.55
-        for (let i = 0; i < 45; i++) forceStep(vis, edges, { w: W, h: H, ideal })
-        separateBoxes(vis, 18, 16)
+        this.handlers.onMoveNode?.(id, Math.round(b.x - b.dx), Math.round(b.y))
+        // 松手后再收敛几轮，让它停在稳定的位置
+        const list = this.listOfVisible()
+        const edges = this.physicsEdges(new Set(list.map((x) => x.id)))
+        const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.5
+        for (let i = 0; i < 24; i++) forceStep(list, edges, { w: W, h: H, ideal })
+        separateBoxes(list, 16, 18)
         this.render()
       }
       this.panFrom = null
       this.downAt = null
       return
     }
-    // 空白处点一下（不是拖动）＝取消选中
     if (this.panFrom && this.downAt && this.selected) {
       const moved = Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y)
       const onNode = !!(e.target as Element)?.closest?.('.node')
@@ -332,6 +353,24 @@ export class KnowledgeGraph {
     }
     this.panFrom = null
     this.downAt = null
+  }
+
+  /** 拖动时只算"被拖的这个不动，其它让开"，两三轮就够 */
+  private relaxAround(activeId: string): void {
+    const list = this.listOfVisible()
+    const box = this.boxes.get(activeId)
+    if (box) box.pinned = true
+    const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
+    const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.5
+    for (let i = 0; i < 3; i++) {
+      forceStep(list, edges, { w: W, h: H, ideal })
+      separateBoxes(list, 14, 4)
+    }
+    if (box) {
+      // 被拖的节点不能被推走
+      box.vx = 0
+      box.vy = 0
+    }
   }
 
   private applyCam(): void {
@@ -346,12 +385,11 @@ export class KnowledgeGraph {
     this.applyCam()
   }
 
-  /** 把所有节点装进视口 */
   fit(): void {
-    const vis = this.visibleNodes().map((n) => this.boxes.get(n.id)).filter(Boolean) as NodeBox[]
+    const vis = this.listOfVisible()
     if (!vis.length) return
     const r = this.svg.getBoundingClientRect()
-    const pad = 48
+    const pad = 44
     let minX = Infinity
     let minY = Infinity
     let maxX = -Infinity
@@ -362,10 +400,7 @@ export class KnowledgeGraph {
       maxX = Math.max(maxX, b.x + b.w / 2)
       maxY = Math.max(maxY, b.y + b.h / 2)
     }
-    const bw = maxX - minX
-    const bh = maxY - minY
-    const raw = Math.min((r.width - pad * 2) / bw, (r.height - pad * 2) / bh)
-    // 下限 0.62：宁可让图超出视口（用户可以拖），也不要把字缩到看不清
+    const raw = Math.min((r.width - pad * 2) / (maxX - minX), (r.height - pad * 2) / (maxY - minY))
     this.k = Math.max(0.62, Math.min(1.6, raw))
     this.tx = r.width / 2 - ((minX + maxX) / 2) * this.k
     this.ty = r.height / 2 - ((minY + maxY) / 2) * this.k
@@ -390,7 +425,7 @@ export class KnowledgeGraph {
   setFold(fold: boolean): void {
     this.fold = fold
     this.measure()
-    this.layout(200)
+    this.layout(220)
     this.render()
   }
 
@@ -400,97 +435,84 @@ export class KnowledgeGraph {
 
   /* ---------------- 渲染 ---------------- */
 
+  private dotPos(b: NodeBox): { x: number; y: number } {
+    return { x: b.x - b.dx, y: b.y }
+  }
+
   render(): void {
     this.gEdge.innerHTML = ''
     this.gNode.innerHTML = ''
-    this.gLabel.innerHTML = ''
     this.edgeEls = []
 
     const vis = this.visibleNodes()
     const visIds = new Set(vis.map((n) => n.id))
 
-    // 边先画，压在节点下面
     for (const spec of this.edges) {
       if (!visIds.has(spec.a) || !visIds.has(spec.b)) continue
       const a = this.boxes.get(spec.a)
       const b = this.boxes.get(spec.b)
       if (!a || !b) continue
+      const pa = this.dotPos(a)
+      const pb = this.dotPos(b)
       const g = el('g', { class: 'edge', 'data-a': spec.a, 'data-b': spec.b })
-      const line = el('line', {
-        class: `e-${spec.kind}`,
-        x1: a.x,
-        y1: a.y,
-        x2: b.x,
-        y2: b.y
-      })
+      const line = el('line', { class: `e-${spec.kind}`, x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y })
       if (spec.kind === 'pre') line.setAttribute('marker-end', 'url(#arw)')
       g.append(line)
       this.gEdge.append(g)
       this.edgeEls.push({ spec, line })
     }
 
-    // 节点
     for (const n of vis) {
       const b = this.boxes.get(n.id)
       if (!b) continue
       const band = n.kind === 'root' ? 'root' : bandOf(this.mastery[n.id], this.now)
-      const g = el('g', {
-        class: `node ${n.kind === 'root' ? 'root' : band}`,
-        'data-id': n.id,
-        transform: `translate(${b.x},${b.y})`
-      })
+      const p = this.dotPos(b)
+      const g = el('g', { class: `node ${n.kind === 'root' ? 'root' : band}`, 'data-id': n.id, transform: `translate(${p.x},${p.y})` })
       const fill = n.kind === 'root' ? 'var(--ink)' : COLOR[band] ?? COLOR.unmeasured
-      const rect = el('rect', {
-        x: -b.w / 2,
-        y: -b.h / 2,
-        width: b.w,
-        height: b.h,
-        rx: 9,
-        ry: 9,
-        fill
-      })
-      g.append(rect)
-      const dark = n.kind === 'root' || !LIGHT_FILL.has(fill)
-      const lh = b.metrics.lines.length > 1 ? (b.metrics.height / b.metrics.lines.length) : 0
-      const startY = -((b.metrics.lines.length - 1) * lh) / 2
-      b.metrics.lines.forEach((line, i) => {
-        const t = el('text', {
-          x: 0,
-          y: startY + i * lh,
-          fill: dark ? '#ffffff' : '#1f2328',
-          'font-size': n.kind === 'root' ? 14 : 12.5,
-          'font-weight': n.kind === 'root' ? 600 : 500
+
+      // 命中区：圆点 + 文字整块都能点，不然小圆点太难点中
+      g.append(
+        el('rect', {
+          class: 'hit',
+          x: -b.r - 4,
+          y: -b.h / 2,
+          width: b.w - 2,
+          height: b.h,
+          rx: 6,
+          fill: 'transparent'
         })
-        t.textContent = line
-        g.append(t)
-      })
+      )
+      g.append(el('circle', { class: 'dot', r: b.r, fill }))
+      const t = el('text', { x: b.r + LABEL_GAP, y: 0, 'font-size': LABEL_FONT, 'font-weight': n.kind === 'root' ? 700 : 500 })
+      t.textContent = b.label
+      g.append(t)
       this.gNode.append(g)
     }
 
     this.applyDim()
   }
 
-  private moveNodeEl(b: NodeBox): void {
-    const g = this.gNode.querySelector(`.node[data-id="${CSS.escape(b.id)}"]`) as SVGGElement | null
-    if (g) g.setAttribute('transform', `translate(${b.x},${b.y})`)
-  }
-
-  private updateEdgesFor(id: string): void {
-    const b = this.boxes.get(id)
-    if (!b) return
+  /** 拖动过程中把位置同步到 DOM（不重建节点，避免闪烁） */
+  private syncAll(): void {
+    for (const [id, b] of this.boxes) {
+      const g = this.gNode.querySelector(`.node[data-id="${CSS.escape(id)}"]`) as SVGGElement | null
+      if (!g) continue
+      const p = this.dotPos(b)
+      g.setAttribute('transform', `translate(${p.x},${p.y})`)
+    }
     for (const { spec, line } of this.edgeEls) {
-      if (spec.a !== id && spec.b !== id) continue
       const a = this.boxes.get(spec.a)
       const c = this.boxes.get(spec.b)
       if (!a || !c) continue
-      line.setAttribute('x1', String(a.x))
-      line.setAttribute('y1', String(a.y))
-      line.setAttribute('x2', String(c.x))
-      line.setAttribute('y2', String(c.y))
+      const pa = this.dotPos(a)
+      const pc = this.dotPos(c)
+      line.setAttribute('x1', String(pa.x))
+      line.setAttribute('y1', String(pa.y))
+      line.setAttribute('x2', String(pc.x))
+      line.setAttribute('y2', String(pc.y))
     }
   }
 
-  /** 选中谁，就只显示和谁相关的那些线；缺口模式再压暗不弱的节点 */
   private applyDim(): void {
     const focus = this.selected
     this.gEdge.querySelectorAll('.edge').forEach((e) => {
@@ -507,13 +529,16 @@ export class KnowledgeGraph {
         dim = !weak
       }
       n.classList.toggle('dim', dim)
+      n.classList.toggle('sel', id === focus)
     })
   }
 
-  /** 当前布局快照（写回本地用） */
   snapshotPositions(): Record<string, [number, number]> {
     const out: Record<string, [number, number]> = {}
-    for (const [id, b] of this.boxes) out[id] = [Math.round(b.x), Math.round(b.y)]
+    for (const [id, b] of this.boxes) {
+      const p = this.dotPos(b)
+      out[id] = [Math.round(p.x), Math.round(p.y)]
+    }
     return out
   }
 }
