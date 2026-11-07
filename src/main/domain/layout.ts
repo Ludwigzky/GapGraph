@@ -209,8 +209,12 @@ export interface ForceOpts {
   linkDistance?: number
   /** 相连节点的弹簧强度 0..1 */
   linkStrength?: number
-  /** 向心力：所有节点被拉向画布中心 */
-  centerStrength?: number
+  /**
+   * 向心：只把"整体重心"平移回画布中心，**不对单个节点施加随距离增长的拉力**。
+   * 之前写成 k·r 会让边缘节点被拉回来的力远大于斥力（实测 125 倍），
+   * 结果是外围往内收拢、整张图缩成一坨，而不是从中心发散出去。
+   */
+  recenter?: number
   /** 速度衰减 0..1，越大越"黏" */
   velocityDecay?: number
   /** 单帧位移上限，防止瞬移 */
@@ -238,7 +242,7 @@ export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpt
   const charge = opts.charge ?? -120
   const linkDistance = opts.linkDistance ?? 120
   const linkStrength = opts.linkStrength ?? 0.54
-  const centerStrength = opts.centerStrength ?? 0.05
+  const recenter = opts.recenter ?? 0.08
   const velocityDecay = Math.max(0, Math.min(0.95, opts.velocityDecay ?? 0.45))
   const maxStep = opts.maxStep ?? 60
   const cx = w / 2
@@ -285,10 +289,31 @@ export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpt
     b.vy -= dy * l
   }
 
-  // ③ 向心 + ④ 积分
+  // ③ 向心：只平移整体重心，不改形状（d3 的 forceCenter 就是这么做的）。
+  //    节点不再受"离得越远拉得越狠"的力，外围才能自由发散。
+  if (recenter > 0) {
+    let sx = 0
+    let sy = 0
+    let cnt = 0
+    for (const nd of nodes) {
+      if (nd.pinned) continue
+      sx += nd.x
+      sy += nd.y
+      cnt++
+    }
+    if (cnt > 0) {
+      const shiftX = (cx - sx / cnt) * recenter
+      const shiftY = (cy - sy / cnt) * recenter
+      for (const nd of nodes) {
+        if (nd.pinned) continue
+        nd.x += shiftX
+        nd.y += shiftY
+      }
+    }
+  }
+
+  // ④ 积分
   for (const nd of nodes) {
-    nd.vx += (cx - nd.x) * centerStrength * alpha
-    nd.vy += (cy - nd.y) * centerStrength * alpha
     if (nd.pinned) {
       nd.vx = 0
       nd.vy = 0

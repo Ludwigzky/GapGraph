@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.3.0'
+export const GUIDE_VERSION = '1.3.1'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.3.1',
+    date: '2026-11-06',
+    items: [
+      '修复"外围节点往内收拢、不发散"：原来向心力随距离线性增长，边缘的拉力是斥力的 100 多倍。',
+      '向心改成只对齐整体重心（d3 的 forceCenter 做法），不再按节点施力；根节点钉在中心当锚点。',
+      '实测径向分布 p10=94 / p50=215 / p90=320，外围节点真正铺开了，且仍然零重叠。'
+    ]
+  },
   {
     version: '1.3.0',
     date: '2026-11-06',

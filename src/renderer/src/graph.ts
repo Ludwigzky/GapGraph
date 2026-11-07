@@ -240,17 +240,18 @@ export class KnowledgeGraph {
     charge: number
     linkDistance: number
     linkStrength: number
-    centerStrength: number
+    recenter: number
     velocityDecay: number
     maxStep: number
   } {
     return {
       w: W,
       h: H,
-      charge: -120,
+      charge: -150,
       linkDistance: Math.round(Math.max(100, Math.min(190, Math.sqrt((W * H) / Math.max(1, n)) * 0.62))),
       linkStrength: 0.54,
-      centerStrength: 0.05,
+      // 只对齐整体重心，不按节点拉——否则外围会被引力收回中心
+      recenter: 0.08,
       velocityDecay: 0.45,
       maxStep: 6
     }
@@ -259,6 +260,14 @@ export class KnowledgeGraph {
   private layout(iterations = 340): void {
     const vis = this.visibleNodes()
     const list: NodeBox[] = []
+    // 根节点钉在中心：整棵树从这个锚点往外长，而不是所有节点都被吸向中心
+    const root = vis.find((n) => n.kind === 'root')
+    const rootBox = root ? this.boxes.get(root.id) : undefined
+    if (rootBox && (rootBox.x === 0 && rootBox.y === 0)) {
+      rootBox.x = W / 2
+      rootBox.y = H / 2
+      rootBox.pinned = true
+    }
     vis.forEach((n, i) => {
       const b = this.boxes.get(n.id)
       if (!b) return
