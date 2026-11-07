@@ -14,6 +14,7 @@ const http = require('node:http')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { qcProblems, verifyPromptFor } = require('./question-qc.cjs')
 
 const PORT = Number(process.env.AI_PROXY_PORT || 3300)
 const HOST = '127.0.0.1'
@@ -353,9 +354,6 @@ const server = http.createServer(async (req, res) => {
 
         // 独立复核：不一致就丢
         try {
-          const opt = q.type === 'single' ? `\n选项：${q.options.map((o, i) => `${'ABCD'[i]}. ${o}`).join('  ')}` : ''
-          const what =
-            q.type === 'judge' ? '判断命题真假，answer 输出 "true" 或 "false"' : q.type === 'single' ? '写出正确选项的内容' : '写出填空答案'
           const v = await upstreamRetry(
             {
               model: MODEL,
@@ -363,7 +361,7 @@ const server = http.createServer(async (req, res) => {
               response_format: { type: 'json_object' },
               messages: [
                 { role: 'system', content: verifySystem(exam, subject) },
-                { role: 'user', content: `题目：${q.stem}${opt}\n\n${what}。\n输出：{"answer":"...","ambiguous":false}` }
+                { role: 'user', content: verifyPromptFor(q) }
               ]
             },
             20000
@@ -394,6 +392,13 @@ const server = http.createServer(async (req, res) => {
           }
         } catch (e) {
           reject.push(`复核失败:${e.message}`)
+          continue
+        }
+
+        // 第三道闸门：解析自洽（确定性检查，不依赖模型）
+        const qc = qcProblems(q)
+        if (qc.length) {
+          reject.push(`自洽检查:${qc.join('；')}`)
           continue
         }
 

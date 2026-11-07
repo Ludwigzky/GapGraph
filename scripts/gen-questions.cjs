@@ -15,6 +15,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { qcProblems, verifyPromptFor } = require('./question-qc.cjs')
 
 const PACK_FILE = 'resources/packs/gaokao-math-function.json'
 const QFILE = 'resources/questions/gaokao-math-function.json'
@@ -161,19 +162,8 @@ function genPrompt(node, targets) {
 const VERIFY_SYSTEM = `你是高考数学阅卷老师。只输出 JSON。
 你不看解析，独立把题做一遍。如果题目本身有歧义或算不出来，就如实标记 ambiguous。`
 
-function verifyPrompt(q) {
-  const opt = q.type === 'single' ? `\n选项：${q.options.map((o, i) => `${'ABCD'[i]}. ${o}`).join('  ')}` : ''
-  const ask2 =
-    q.type === 'judge'
-      ? '请判断这个命题是否正确，answer 输出 "true" 或 "false"。'
-      : q.type === 'single'
-        ? '请给出正确选项的内容（原样抄写该选项，不要只写字母）。'
-        : '请给出填空答案。'
-  return `题目：${q.stem}${opt}
-
-${ask2}
-输出：{"answer":"你的答案","confident":true,"ambiguous":false}`
-}
+/* 复核提示词统一走 question-qc.cjs 的 verifyPromptFor：
+   它按题型强制"先列中间结果再下结论"，比这里的旧版更能拦住系统性错误。 */
 
 /* ---------------- 结构校验 ---------------- */
 function validate(q) {
@@ -264,13 +254,13 @@ function stemKey(s) {
           continue
         }
 
-        // 第二道闸门：独立复核
+        // 第二道闸门：独立复核（先把中间结果列出来，再下结论）
         let verdict
         try {
           const v = await ask(
             [
               { role: 'system', content: VERIFY_SYSTEM },
-              { role: 'user', content: verifyPrompt(q) }
+              { role: 'user', content: verifyPromptFor(q) }
             ],
             0.2
           )
@@ -293,6 +283,14 @@ function stemKey(s) {
             why: `复核答案不一致：生成=${q.answer} 复核=${verdict.answer}`
           })
           process.stdout.write(`  ✗ 答案不一致 生成「${q.answer}」复核「${verdict.answer}」\n`)
+          continue
+        }
+
+        // 第三道闸门：解析自洽（确定性检查，不依赖模型）
+        const qc = qcProblems(q)
+        if (qc.length) {
+          rejected.push({ node: node.name, stem: q.stem, why: `自洽检查：${qc.join('；')}` })
+          process.stdout.write(`  ✗ 自洽检查：${qc.join('；')}\n`)
           continue
         }
 

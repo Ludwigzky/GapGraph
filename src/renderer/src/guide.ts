@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.8.1'
+export const GUIDE_VERSION = '1.9.0'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.9.0',
+    date: '2026-11-07',
+    items: [
+      '题库多了一道「解析自洽」检查：解析的结论方向必须和答案一致，对不上就直接丢弃。',
+      'AI 复核方式改了：不再让它"再做一遍"，而是要求先把每种情况逐一列出来再下结论——错误没地方藏。',
+      '起因是一道化学判断题：题干说法其实是对的，答案键却记成"错误"，而解析最后明明写着"所以说法正确"。现在这种题会被拦下。'
+    ]
+  },
   {
     version: '1.8.1',
     date: '2026-11-07',
