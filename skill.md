@@ -376,12 +376,43 @@ scripts/
   audit-questions.cjs 题库盲审（独立复核已入库的题）
   serve.cjs           零依赖静态服务器（自测用）
   drive.cjs / probe-*.cjs  CDP 驱动与探针（自测用）
-tests/                9 个文件 90 条
+  probe-browser.cjs   只启停自己那份无头浏览器（见 7.4，禁止按名字杀进程）
+tests/                11 个文件 129 条
 ```
 
 ---
 
 ## 七、质量保障
+
+### 7.4 自动化验证的浏览器纪律（血泪教训）
+
+**绝对不要** `taskkill /F /IM msedge.exe`。那是按**进程名**杀，
+会把用户自己开着的浏览器一起杀掉，标签页全丢——这条代价是真实发生过的。
+
+统一走 `scripts/probe-browser.cjs`：
+
+```bash
+node scripts/probe-browser.cjs start --port 9490   # 起自己的实例，PID 记进 .cache/probe-edge.json
+node scripts/probe-browser.cjs status              # 看还在不在
+node scripts/probe-browser.cjs stop                # 只 taskkill /T /PID 自己那棵
+```
+
+它做了三层保护：
+
+1. 启动时记录自己的 PID，不靠进程名认亲
+2. 停止前用 `Get-CimInstance` 核命令行里有没有我们的 `edge-prof` 专用 profile，
+   PID 被复用时会**拒绝杀死**
+3. 只 `/T /PID` 杀自己那棵进程树，其它 Edge 一概不碰
+
+实测：用户 24 个 Edge 进程，start→stop 一轮后仍然 24 个全部存活。
+
+同理，**不要** `Get-Process node | Stop-Process`——本地代理按端口定位再杀：
+
+```bash
+netstat -ano | findstr :3300     # 拿到 PID
+taskkill /F /PID <那个PID>
+```
+
 
 ### 7.1 测试
 
