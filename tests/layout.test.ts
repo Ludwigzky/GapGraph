@@ -155,6 +155,38 @@ describe('力导向：相关的靠拢，无关的推开', () => {
       forceStep(nodes, [{ a: 'a', b: 'b', strength: 3 }], { w: 1000, h: 600, maxStep: 4.5 })
     expect(Math.abs(nodes[0].x - nodes[1].x)).toBeLessThan(before)
   })
+
+  it('软锚：被拖过的节点仍会被邻居挤动，但不会跑远', () => {
+    const anchored = mkNode('a', 500, 300)
+    anchored.anchor = { x: 500, y: 300 }
+    const pusher = mkNode('b', 500, 300)
+    for (let i = 0; i < 30; i++) {
+      forceStep([anchored, pusher], [], { w: 1000, h: 600, alpha: 1 })
+    }
+    const drift = Math.hypot(anchored.x - 500, anchored.y - 300)
+    // 会被推开（不是钉死）
+    expect(drift).toBeGreaterThan(1)
+    // 但明显比没有锚的推得更少，不会跑远
+    expect(drift).toBeLessThan(120)
+  })
+
+  it('软锚比硬钉松：同样受力下锚定节点位移必须大于 0', () => {
+    const a = mkNode('a', 300, 300)
+    a.anchor = { x: 300, y: 300 }
+    const b = mkNode('b', 320, 300)
+    const c = mkNode('c', 320, 340)
+    for (let i = 0; i < 40; i++) forceStep([a, b, c], [], { w: 1000, h: 600, alpha: 1 })
+    expect(a.x).not.toBe(300)
+  })
+
+  it('硬钉住的节点纹丝不动', () => {
+    const a = mkNode('a', 300, 300)
+    a.pinned = true
+    const b = mkNode('b', 310, 300)
+    for (let i = 0; i < 40; i++) forceStep([a, b], [], { w: 1000, h: 600, alpha: 1 })
+    expect(a.x).toBe(300)
+    expect(a.y).toBe(300)
+  })
 })
 
 describe('软分离：一次只推一部分，才像排斥', () => {

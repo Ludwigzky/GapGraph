@@ -179,7 +179,10 @@ export function hasOverlap(boxes: Box[], gap = 0): boolean {
 }
 
 export interface ForceNode extends Box {
+  /** 硬钉住：物理完全不动（只给根节点这种锚点用） */
   pinned?: boolean
+  /** 软锚：用户拖过的位置，用弱弹簧往回拉，但仍然会被邻居挤动 */
+  anchor?: { x: number; y: number }
   vx: number
   vy: number
 }
@@ -215,6 +218,12 @@ export interface ForceOpts {
    * 结果是外围往内收拢、整张图缩成一坨，而不是从中心发散出去。
    */
   recenter?: number
+  /**
+   * 软锚强度：用户拖过的位置用弱弹簧往回拉。
+   * 设成 0 就完全不留恋；设成 1 等于钉死。
+   * 关键是"弱"——强到能让它留在原地，弱到邻居还能把它挤开一点。
+   */
+  anchorStrength?: number
   /** 速度衰减 0..1，越大越"黏" */
   velocityDecay?: number
   /** 单帧位移上限，防止瞬移 */
@@ -243,6 +252,7 @@ export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpt
   const linkDistance = opts.linkDistance ?? 120
   const linkStrength = opts.linkStrength ?? 0.54
   const recenter = opts.recenter ?? 0.08
+  const anchorStrength = opts.anchorStrength ?? 0.15
   const velocityDecay = Math.max(0, Math.min(0.95, opts.velocityDecay ?? 0.45))
   const maxStep = opts.maxStep ?? 60
   const cx = w / 2
@@ -318,6 +328,11 @@ export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpt
       nd.vx = 0
       nd.vy = 0
       continue
+    }
+    // 软锚：把用户摆过的位置当一根很松的皮筋，不是钉子
+    if (nd.anchor) {
+      nd.vx += (nd.anchor.x - nd.x) * anchorStrength * alpha
+      nd.vy += (nd.anchor.y - nd.y) * anchorStrength * alpha
     }
     nd.vx *= 1 - velocityDecay
     nd.vy *= 1 - velocityDecay

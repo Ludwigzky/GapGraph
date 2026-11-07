@@ -18,7 +18,7 @@ import aiJson from '../../../resources/ai/gaokao-math-function.json'
 import { addCard, isSaved, loadCards, removeCard } from './cards'
 import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
 import { addToBank } from './qbank'
-import { addUserNode, loadPositions, removeUserNode, saveOnePosition } from './edits'
+import { addUserNode, clearPositions, loadPositions, removeUserNode, saveOnePosition } from './edits'
 import { currentPack, listPacks, packProgress, questionsOfPack, relTime, removeCustomPack, renamePack, resolvePack, saveCustomPack, saveMergedPack, setActivePackId, markStudied, stateOfPack } from './packs'
 import { canMerge, mergeSources } from '../../main/domain/merge'
 import { normalizeGeneratedPack } from '../../main/domain/pack'
@@ -845,6 +845,7 @@ function mount(): void {
         <button class="ghost small h-only" id="heat-sort">缺口优先</button>
         <button class="ghost small g-only" id="guide-btn">指南</button>
         <button class="ghost small g-only" id="fold" aria-pressed="true">折叠</button>
+        <button class="ghost small g-only" id="relayout">重排</button>
         <button class="ghost small g-only" id="add-node">＋考点</button>
         <button class="ghost small" id="diag">摸底</button>
         <button class="ghost small" id="cards-btn">卡片 0</button>
@@ -908,6 +909,10 @@ function mount(): void {
   })
   $('#diag').addEventListener('click', () => startDiagnostic())
   $('#add-node')?.addEventListener('click', () => addNodeInteractive())
+  $('#relayout')?.addEventListener('click', () => {
+    clearPositions(pack.packId)
+    graph.resetLayout()
+  })
 
   document.querySelectorAll<HTMLButtonElement>('.views button').forEach((b) => {
     b.addEventListener('click', () => setView(b.dataset.view as 'graph' | 'heat'))

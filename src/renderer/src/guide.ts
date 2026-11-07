@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.3.1'
+export const GUIDE_VERSION = '1.3.2'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.3.2',
+    date: '2026-11-06',
+    items: [
+      '修复"拖过的节点像被钉死、别的节点动它不受影响"：原来拖动结束会把它永久钉住，而且刷新后读回位置又钉一次。',
+      '改成"软锚"：你放的位置会用一根很松的皮筋拉着，能留在原处，但邻居挤过来时它还会让开一点。',
+      '顶栏新增「重排」：图拖乱了可以一键清掉所有手工位置，重新排一次。'
+    ]
+  },
   {
     version: '1.3.1',
     date: '2026-11-06',

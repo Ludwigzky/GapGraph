@@ -215,7 +215,8 @@ export class KnowledgeGraph {
         h: boxH,
         vx: 0,
         vy: 0,
-        pinned: old?.pinned
+        pinned: old?.pinned,
+        anchor: old?.anchor
       })
     }
     for (const id of [...this.boxes.keys()]) if (!this.nodes.some((n) => n.id === id)) this.boxes.delete(id)
@@ -303,7 +304,9 @@ export class KnowledgeGraph {
       // 存的是圆点坐标，碰撞箱中心要加回偏移
       b.x = x + b.dx
       b.y = y
-      b.pinned = true
+      // 关键：读到的位置是"软锚"不是"钉子"——
+      // 之前这里设 pinned，导致拖过一次的节点永久冻住，邻居怎么动它都不动。
+      b.anchor = { x, y }
       any = true
     }
     if (any) {
@@ -380,6 +383,9 @@ export class KnowledgeGraph {
       this.dragTarget = null
       this.gNode.querySelector('.dragging')?.classList.remove('dragging')
       if (b) {
+        // 松手：解除硬钉，换成软锚——它会留在你放的地方，但邻居还能挤动它
+        b.pinned = false
+        b.anchor = { x: b.x - b.dx, y: b.y }
         this.handlers.onMoveNode?.(id, Math.round(b.x - b.dx), Math.round(b.y))
         // 松手后继续跑模拟，让它自己"软"下来，而不是啪一下停住
         this.startSim()
@@ -428,7 +434,15 @@ export class KnowledgeGraph {
         b.y = this.dragTarget.y
         b.vx = 0
         b.vy = 0
+        // 只在拖动当下钉住；松手立刻解除，换成软锚
         b.pinned = true
+      }
+    }
+    // 除了正在拖的那个，其余节点的 pinned 一律清掉（根节点除外，它是锚点）
+    if (!this.dragTarget) {
+      const rootId = this.nodes.find((n) => n.kind === 'root')?.id
+      for (const b of list) {
+        if (b.id !== rootId && b.pinned) b.pinned = false
       }
     }
 
@@ -523,6 +537,20 @@ export class KnowledgeGraph {
 
   isFolded(): boolean {
     return this.fold
+  }
+
+  /** 清掉所有软锚和拖拽位置，重新排一次——"我把图拖乱了"的逃生口 */
+  resetLayout(): void {
+    for (const b of this.boxes.values()) {
+      b.anchor = undefined
+      b.pinned = false
+      b.vx = 0
+      b.vy = 0
+    }
+    this.measure()
+    this.layout(360)
+    this.render()
+    this.fit()
   }
 
   /* ---------------- 渲染 ---------------- */

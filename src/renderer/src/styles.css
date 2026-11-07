@@ -200,8 +200,7 @@ aside, section { min-height: 0; overflow: auto; }
 #graph .e-pre { stroke: var(--pre); stroke-width: 1.5; stroke-dasharray: 6 5; }
 #graph .e-con { stroke: var(--con); stroke-width: 1.7; stroke-dasharray: 1.5 5; }
 
-/* 关系线默认不画：选中谁才显示和谁相关的那几条 */
-#graph .e-pre { display: none; }
+/* 关系线默认不画：选中谁才显示和谁相关的那几条 */#graph .e-pre { display: none; }
 #graph .e-con { display: none; }
 
 #graph .edge.ctx > .e-pre,
