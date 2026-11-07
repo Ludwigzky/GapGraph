@@ -80,7 +80,8 @@ export function applyDiagAnswer(
 export interface DiagSummary {
   answered: number
   touched: number
-  bands: { red: number; orange: number; yellow: number; green: number }
+  /** 摸底结束时的分档统计；self/unmeasured 不会出现（这些节点都答过题） */
+  bands: { red: number; orange: number; yellow: number; green: number; self: number }
   weakest: { id: string; name: string; score: number }[]
 }
 
@@ -92,14 +93,16 @@ export function summarize(
   now: number
 ): DiagSummary {
   const touchedIds = [...new Set(state.answered.map((a) => a.nodeId))]
-  const bands = { red: 0, orange: 0, yellow: 0, green: 0 }
+  const bands = { red: 0, orange: 0, yellow: 0, green: 0, self: 0 }
   const scored: { id: string; name: string; score: number }[] = []
 
   for (const id of touchedIds) {
     const m = mastery[id]
     if (!m || m.n === 0) continue
     const b = band(m, now)
-    if (b !== 'unmeasured') bands[b] += 1
+    // 摸完底的节点都答过题，理论上不会落在这两档；保险起见跳过而不是崩掉
+    if (b === 'unmeasured' || b === 'self') continue
+    bands[b] += 1
     scored.push({ id, name: nodes.find((n) => n.id === id)?.name ?? id, score: masteryScore(m, now) })
   }
 

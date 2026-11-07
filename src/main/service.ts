@@ -5,6 +5,7 @@ import type { AppState, LoadResult, Pack, Question, SubmitPayload, SubmitResult,
 import { DAY, applyAttempt, band, effective, freshMastery, masteryScore } from './domain/mastery'
 import { buildToday, blankMastery, coverage, daysUntil } from './domain/queue'
 import { isCorrect } from './domain/grading'
+import { buildAttemptRecord } from './domain/attempt-log'
 
 interface QuestionBank {
   packId: string
@@ -143,18 +144,19 @@ export class Service {
       })
     }
 
-    this.state.attempts.push({
-      id: `a_${now}_${Math.random().toString(36).slice(2, 8)}`,
-      questionId: q.id,
-      nodePrimary: primary.nodeId,
-      startedAt: now - payload.durationMs,
-      submittedAt: now,
-      durationMs: payload.durationMs,
-      correct,
-      selfConfidence: payload.selfConfidence,
-      guessed,
-      errorReason: correct ? null : payload.errorReason
-    })
+    this.state.attempts.push(
+      buildAttemptRecord({
+        id: `a_${now}_${Math.random().toString(36).slice(2, 8)}`,
+        question: q,
+        primaryNodeId: primary.nodeId,
+        correct,
+        guessed,
+        durationMs: payload.durationMs,
+        now,
+        selfConfidence: payload.selfConfidence,
+        errorReason: payload.errorReason
+      })
+    )
     if (this.state.attempts.length > 2000) this.state.attempts.shift()
 
     // 完成了这张卡上的题，就把卡标记完成
@@ -222,7 +224,9 @@ export class Service {
   rate(nodeId: string, level: 0 | 1 | 2): AppState {
     const m = this.state.mastery[nodeId] ?? freshMastery(0)
     const K = level === 0 ? 0 : level === 1 ? 0.5 : 1
-    this.state.mastery[nodeId] = { ...m, K, A: level === 2 ? 0.6 : m.A }
+    // 自评只改覆盖度，不改"有没有被答题验证过"这件事
+    const evidence = m.n > 0 ? 'tested' : K > 0 ? 'self' : 'none'
+    this.state.mastery[nodeId] = { ...m, K, A: level === 2 ? 0.6 : m.A, evidence }
     this.save()
     return this.state
   }

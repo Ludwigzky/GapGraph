@@ -219,7 +219,7 @@ const server = http.createServer(async (req, res) => {
 - 有且只有一个 kind=root 的根节点，parentId 为 null
 - 其余节点的 parentId 必须是已有节点 id
 - prereq 填"必须先学会"的节点 id（可为空数组）
-- examWeight 取 0.2–1.0，表示考频×分值的相对重要性
+- examWeight 取 0.2–1.0，表示该考点在本章里的相对重要性估计（**不是**历年考频统计，只是你的判断）
 - kind=skill 表示"题型/方法"，kind=concept 表示"概念/定理"`
             },
             {
@@ -290,7 +290,7 @@ const server = http.createServer(async (req, res) => {
             { role: 'system', content: teacherSystem(exam, subject) },
             {
               role: 'user',
-              content: `章节：${chapter || '（未提供）'}\n考点：${nodeName}\n简述：${brief || '（无）'}\n考频权重：${examWeight}
+              content: `章节：${chapter || '（未提供）'}\n考点：${nodeName}\n简述：${brief || '（无）'}\n重要性估计：${examWeight}（0-1，主观判断，非考频统计）
 
 出 ${need} 道题，难度严格按这个顺序：${diffs.join('、')}
 题目必须属于「${nodeName}」这个考点，不要出成别的章节的内容。

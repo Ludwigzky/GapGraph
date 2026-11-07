@@ -22,6 +22,8 @@ export interface Cell {
   correct: number
   /** null 表示这道难度还没做过 —— 是"不知道"，不是"全错" */
   ratio: number | null
+  /** 疑似蒙对、被排除在有效统计之外的条数（和掌握度口径保持一致） */
+  excluded: number
 }
 
 export interface HeatRow {
@@ -49,9 +51,9 @@ export interface HeatmapArgs {
 }
 
 const emptyCells = (): Record<BandKey, Cell> => ({
-  easy: { attempts: 0, correct: 0, ratio: null },
-  mid: { attempts: 0, correct: 0, ratio: null },
-  hard: { attempts: 0, correct: 0, ratio: null }
+  easy: { attempts: 0, correct: 0, ratio: null, excluded: 0 },
+  mid: { attempts: 0, correct: 0, ratio: null, excluded: 0 },
+  hard: { attempts: 0, correct: 0, ratio: null, excluded: 0 }
 })
 
 function treeOrder(nodes: KNode[]): string[] {
@@ -93,6 +95,13 @@ export function buildHeatmap(args: HeatmapArgs): HeatRow[] {
     if (!node) continue
     const bucket = acc.get(a.nodePrimary) ?? emptyCells()
     const cell = bucket[bandOf(q.difficulty)]
+    // 疑似蒙对：掌握度那边直接跳过（见 applyAttempt），
+    // 热力图也必须跳过，否则会出现"分数没涨、正确率却涨了"的自相矛盾。
+    if (a.guessed && a.correct) {
+      cell.excluded += 1
+      acc.set(a.nodePrimary, bucket)
+      continue
+    }
     cell.attempts += 1
     if (a.correct) cell.correct += 1
     acc.set(a.nodePrimary, bucket)
@@ -141,12 +150,17 @@ export interface HeatSummary {
   total: number
   gaps: number
   unmeasured: number
+  /** 全表有多少条疑似蒙对被排除在有效统计外 */
+  excluded: number
 }
 
 export function summarizeHeat(rows: HeatRow[]): HeatSummary {
+  let excluded = 0
+  for (const r of rows) for (const b of BANDS) excluded += r.cells[b.key].excluded
   return {
     total: rows.length,
     gaps: rows.filter((r) => r.mastery !== null && r.mastery < 0.4).length,
-    unmeasured: rows.filter((r) => r.mastery === null).length
+    unmeasured: rows.filter((r) => r.mastery === null).length,
+    excluded
   }
 }

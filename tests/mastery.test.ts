@@ -27,7 +27,8 @@ describe('掌握度模型', () => {
     const scored = masteryScore(m, T0)
     expect(scored).toBeGreaterThan(0.2)
     expect(scored).toBeLessThan(0.4)
-    expect(band(m, T0)).toBe('orange')
+    // 自评还没被答题验证：单独一档，不能被当成"已测"来展示
+    expect(band(m, T0)).toBe('self')
   })
 
   it('连续答对难题会涨分，连续答错会掉分', () => {
@@ -81,7 +82,8 @@ describe('掌握度模型', () => {
 
   it('自评"学过不会"的考点，连续做对能真的走到绿色（不能被 K 封顶）', () => {
     let m = { ...freshMastery(0.5), A: 0.3 }
-    expect(band(m, T0)).toBe('red')
+    // 还没做题：是"自评待验证"，不是"已测薄弱"
+    expect(band(m, T0)).toBe('self')
     for (let i = 1; i <= 4; i++) {
       m = applyAttempt(m, {
         difficulty: 3,
@@ -96,10 +98,10 @@ describe('掌握度模型', () => {
     expect(m.K).toBeGreaterThan(0.5)
   })
 
-  it('自评之后立刻有颜色，不用等做题', () => {
+  it('自评之后立刻有状态，但标记为"自评待验证"，不冒充诊断结论', () => {
     expect(band(freshMastery(0), T0)).toBe('unmeasured')
-    expect(band(freshMastery(0.5), T0)).toBe('red')
-    expect(band(freshMastery(1), T0)).toBe('orange')
+    expect(band(freshMastery(0.5), T0)).toBe('self')
+    expect(band(freshMastery(1), T0)).toBe('self')
   })
 
   it('连续答错必须掉到红色 —— 正确率 0% 不能显示成"还行"', () => {

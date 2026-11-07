@@ -25,6 +25,8 @@ export function normalizeGeneratedPack(raw: {
       kind,
       // 注意 0 是合法输入，不能写成 Number(x) || 0.5（0 会被吞掉）
       examWeight: Math.min(1, Math.max(0.2, Number.isFinite(w) ? w : 0.5)),
+      // 模型给的是"重要性估计"，没有任何真题统计支撑，标成 ai
+      weightSource: 'ai',
       prereq: Array.isArray(n.prereq) ? n.prereq.map((p) => String(p).slice(0, 40)) : [],
       confusable: [],
       brief: String(n.brief ?? '').slice(0, 120)

@@ -8,6 +8,8 @@
   --pre: #5b6472;
   --con: #7c5cff;
   --c0: #dadcd9;
+  /* 自评未验证：虚线圈的颜色，和"没测过"的灰区分开 */
+  --self: #a8a29e;
   --c1: #ef4444;
   --c2: #f97316;
   --c3: #eab308;
@@ -270,6 +272,14 @@ aside, section { min-height: 0; overflow: auto; }
 #graph .node.sel text { font-weight: 700; }
 /* 未测节点：灰要灰得看得见，不然"不知道"和"不存在"分不清 */
 #graph .node.unmeasured .dot { fill: #b3b9c0; }
+/* 自评未验证：空心圈 + 虚线感，和"塌了"的实心红明确区分 */
+#graph .node.self .dot {
+  fill: #fff;
+  stroke: var(--self);
+  stroke-width: 2;
+  stroke-dasharray: 2.5 2;
+}
+#graph .node.self text { fill: #6b7280; }
 
 #graph .edge path { fill: none; stroke-linecap: round; }
 
@@ -394,6 +404,9 @@ aside, section { min-height: 0; overflow: auto; }
   backdrop-filter: blur(4px);
 }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+/* 自评待验证：空心虚线圈，和实心色区分 */
+.legend i.hollow { background: #fff; border: 2px dashed var(--self); width: 9px; height: 9px; }
+.hint-inline { color: var(--muted); }
 .legend .line { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--tree); margin-right: 4px; vertical-align: 3px; }
 .legend .line.pre { border-top: 2px dashed var(--pre); }
 .legend .line.con { border-top: 2px dotted var(--con); }

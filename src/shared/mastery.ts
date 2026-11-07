@@ -5,7 +5,31 @@ export const DAY = 86_400_000
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
 
 export function freshMastery(K = 0): Mastery {
-  return { K, A: 0.3, s: 1, n: 0, nok: 0, W: 0, Aw: 0, misconception: 0, lastAt: null }
+  return {
+    K,
+    A: 0.3,
+    s: 1,
+    n: 0,
+    nok: 0,
+    W: 0,
+    Aw: 0,
+    misconception: 0,
+    lastAt: null,
+    evidence: K > 0 ? 'self' : 'none'
+  }
+}
+
+/**
+ * 这个掌握状态来自什么证据。
+ *
+ * 以 n/K 为准来推导，**不直接信任 `evidence` 字段**：
+ * 字段只是写下来方便排查，一旦它和 n 打架（老存档、手工构造的 fixture），
+ * 以"有没有真的答过题"为准，否则会出现 n=4 却自称"只是自评"的怪状态。
+ */
+export function evidenceOf(m: Mastery): 'none' | 'self' | 'tested' {
+  if (m.n > 0) return 'tested'
+  if (m.K > 0) return 'self'
+  return 'none'
 }
 
 /** 证据的半衰期：21 天。超过这个尺度，旧作答的影响开始明显变淡 */
@@ -186,7 +210,9 @@ export function applyAttempt(m: Mastery, e: AttemptEffect): Mastery {
     n: m.n + 1,
     nok: m.nok + (e.correct ? 1 : 0),
     misconception,
-    lastAt: e.now
+    lastAt: e.now,
+    // 只要走过一次有效作答（蒙对被跳过，不会走到这里），状态就从"自评"升级为"有证据"
+    evidence: 'tested'
   }
 }
 
@@ -199,11 +225,19 @@ export function dueUrgency(m: Mastery, now: number): number {
   return (0.7 - retention(m, now)) / 0.7
 }
 
-export type Band = 'red' | 'orange' | 'yellow' | 'green' | 'unmeasured'
+/**
+ * 色带。
+ * - unmeasured：什么信息都没有
+ * - self：只有自评，还没做过题 —— 独立一档，避免"自评不会"被画成红色"塌了"
+ * - 其余四档：有作答证据之后的掌握程度
+ */
+export type Band = 'red' | 'orange' | 'yellow' | 'green' | 'self' | 'unmeasured'
 
-/** 五档色带。判据是"有没有任何信息"：自评过（K>0）就该有颜色，不必等做题 */
 export function band(m: Mastery, now: number): Band {
-  if (m.n === 0 && m.K === 0) return 'unmeasured'
+  const ev = evidenceOf(m)
+  if (ev === 'none') return 'unmeasured'
+  // 自评还没被答题验证：单独一档，不参与"塌了/不稳"的判断
+  if (ev === 'self') return 'self'
   const M = masteryScore(m, now)
   if (M < 0.25) return 'red'
   if (M < 0.4) return 'orange'

@@ -9,6 +9,7 @@ import type { AppState, LoadResult, Mastery, Pack, Question, SubmitPayload, Subm
 import { applyAttempt, band, effective, freshMastery, masteryScore } from '../../shared/mastery'
 import { blankMastery, buildToday, coverage, daysUntil } from '../../main/domain/queue'
 import { isCorrect } from '../../main/domain/grading'
+import { buildAttemptRecord } from '../../main/domain/attempt-log'
 import { builtinPack, currentPack, stateKeyFor } from './packs'
 import { loadBank } from './qbank'
 import { applyEdits, loadEdits } from './edits'
@@ -162,18 +163,19 @@ export function createLocalApi() {
         })
       }
 
-      state.attempts.push({
-        id: `a_${now}_${Math.random().toString(36).slice(2, 8)}`,
-        questionId: q.id,
-        nodePrimary: primary.nodeId,
-        startedAt: now - payload.durationMs,
-        submittedAt: now,
-        durationMs: payload.durationMs,
-        correct,
-        selfConfidence: payload.selfConfidence,
-        guessed,
-        errorReason: correct ? null : payload.errorReason
-      })
+      state.attempts.push(
+        buildAttemptRecord({
+          id: `a_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          question: q,
+          primaryNodeId: primary.nodeId,
+          correct,
+          guessed,
+          durationMs: payload.durationMs,
+          now,
+          selfConfidence: payload.selfConfidence,
+          errorReason: payload.errorReason
+        })
+      )
 
       const task = state.tasks.find((t) => t.status === 'pending' && t.questionIds.includes(q.id))
       if (task && correct) task.status = 'done'
@@ -223,7 +225,10 @@ export function createLocalApi() {
     async rate(nodeId: string, level: 0 | 1 | 2) {
       const state = read()
       const m = state.mastery[nodeId] ?? freshMastery(0)
-      state.mastery[nodeId] = { ...m, K: level === 0 ? 0 : level === 1 ? 0.5 : 1, A: level === 2 ? 0.6 : m.A }
+      const K = level === 0 ? 0 : level === 1 ? 0.5 : 1
+      // 自评只改覆盖度，不改"有没有被答题验证过"这件事
+      const evidence = m.n > 0 ? 'tested' : K > 0 ? 'self' : 'none'
+      state.mastery[nodeId] = { ...m, K, A: level === 2 ? 0.6 : m.A, evidence }
       write(state)
       const now = Date.now()
       return { state, today: ensureToday(state, now), overview: overviewOf(state, now) }

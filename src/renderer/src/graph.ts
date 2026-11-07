@@ -1,5 +1,5 @@
 import type { KNode, Mastery, Relation } from '../../shared/types'
-import { masteryScore } from '../../shared/mastery'
+import { band as masteryBand, masteryScore } from '../../shared/mastery'
 import { forceStep, hasOverlap, separateBoxes, textWidth, type ForceEdge, type ForceNode } from '../../main/domain/layout'
 import { PHYSICS_DEFAULTS, type PhysicsParams } from './physics'
 
@@ -17,6 +17,7 @@ const COLOR: Record<string, string> = {
   orange: 'var(--c2)',
   yellow: 'var(--c3)',
   green: 'var(--c5)',
+  self: 'var(--self)',
   unmeasured: 'var(--c0)'
 }
 
@@ -26,13 +27,13 @@ const MAX_LABEL_W = 132
 const DOT_R = 7
 const ROOT_R = 10
 
+/**
+ * 色带直接复用 shared 里的 band()，避免两处各写一套判断。
+ * 之前这里自己实现了一遍，加了「自评」这一档之后就会出现两边不一致。
+ */
 function bandOf(m: Mastery | undefined, now: number): string {
-  if (!m || (m.n === 0 && m.K === 0)) return 'unmeasured'
-  const s = masteryScore(m, now)
-  if (s < 0.25) return 'red'
-  if (s < 0.4) return 'orange'
-  if (s < 0.6) return 'yellow'
-  return 'green'
+  if (!m) return 'unmeasured'
+  return masteryBand(m, now)
 }
 
 /** 文字太长就截断加省略号——标签只做"认得出"，完整名字在右栏 */

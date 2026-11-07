@@ -127,6 +127,7 @@ const BAND_COLOR: Record<string, string> = {
   orange: 'var(--c2)',
   yellow: 'var(--c3)',
   green: 'var(--c5)',
+  self: 'var(--self)', // 自评未验证：虚线圈，不用实心色
   unmeasured: 'var(--c0)'
 }
 
@@ -136,7 +137,29 @@ const BAND_NAME: Record<string, string> = {
   orange: '橙',
   yellow: '黄',
   green: '绿',
+  self: '自评',
   unmeasured: '未测'
+}
+
+/** 面板上那枚标签用的完整说法：说清楚这个状态是"验证过"还是"自己说的" */
+const BAND_LABEL_FULL: Record<string, string> = {
+  red: '已测 · 薄弱',
+  orange: '已测 · 不稳',
+  yellow: '已测 · 勉强',
+  green: '已测 · 稳',
+  self: '自评 · 待验证',
+  unmeasured: '没测过'
+}
+
+/**
+ * 权重说明。examWeight 是"重要性"的估计，不是历年考频。
+ * 目前没有任何节点真的统计过考频，所以这一栏绝不能写成"考频"。
+ */
+function weightNote(n: KNode): string {
+  const w = n.examWeight.toFixed(2)
+  if (n.weightSource === 'stats') return `历史考察频率 ${(n.examWeight * 100).toFixed(0)}%（有真题统计）`
+  if (n.weightSource === 'manual') return `重要性 ${w}（人工整理，未做考频统计）`
+  return `重要性 ${w}（AI 估计，未验证）`
 }
 
 let pack: LoadResult['pack']
@@ -887,6 +910,7 @@ function mount(): void {
             <span><i style="background:var(--c2)"></i>不稳</span>
             <span><i style="background:var(--c3)"></i>勉强</span>
             <span><i style="background:var(--c5)"></i>稳</span>
+            <span><i class="hollow"></i>自评待验证</span>
             <span><i style="background:var(--c0)"></i>没测过</span>
             <span><span class="line"></span>结构（谁是谁的下一层）</span>
             <span><span class="line pre"></span>前置（要先会）</span>
@@ -1152,11 +1176,11 @@ function renderPanel(): void {
     <div class="node-path">${esc(pathOf(n.id))}</div>
     <div class="score-row">
       <div class="score-big ${touched ? '' : 'na'}">${touched ? eff.M.toFixed(2) : '未测'}</div>
-      <div class="pill" style="border-color:${BAND_COLOR[b]};color:${BAND_COLOR[b]}">${b === 'unmeasured' ? '没测过' : '当前掌握'}</div>
+      <div class="pill" style="border-color:${BAND_COLOR[b]};color:${BAND_COLOR[b]}">${BAND_LABEL_FULL[b] ?? '当前掌握'}</div>
       <div class="pill">可信度 ${(eff.conf * 100).toFixed(0)}%</div>
     </div>
     <div class="bar"><i style="width:${Math.round(eff.M * 100)}%;background:${BAND_COLOR[b]}"></i></div>
-    <div class="hint">做过 ${m.n} 题 · 对 ${m.nok} 题 · 考频权重 ${n.examWeight.toFixed(2)}${m.misconception ? ' · 存在固化错误概念' : ''}</div>
+    <div class="hint">做过 ${m.n} 题 · 对 ${m.nok} 题 · ${weightNote(n)}${m.misconception ? ' · 存在固化错误概念' : ''}</div>
 
     <div class="block">
       <h3>讲解</h3>
@@ -1431,7 +1455,11 @@ function renderHeat(): void {
     .map((r) => {
       const cells = BANDS.map((b) => {
         const c = r.cells[b.key]
-        return `<td class="hcell ${CELL_CLASS(c.ratio)}" title="${b.hint}：${c.correct}/${c.attempts}">
+        const hint =
+          b.hint +
+          `：有效 ${c.correct}/${c.attempts}` +
+          (c.excluded ? `（另有 ${c.excluded} 条疑似蒙对，未计入）` : '')
+        return `<td class="hcell ${CELL_CLASS(c.ratio)}" title="${hint}">
                   ${c.ratio === null ? '—' : `${c.correct}/${c.attempts}`}
                 </td>`
       }).join('')
@@ -1453,6 +1481,7 @@ function renderHeat(): void {
       <b>${sum.total}</b> 个考点 ·
       <b class="warn">${sum.gaps}</b> 个塌了 ·
       <b>${sum.unmeasured}</b> 个没测过
+      ${sum.excluded ? `<span class="hsep">|</span><span class="hint-inline">已剔除 ${sum.excluded} 条疑似蒙对</span>` : ''}
       <span class="hsep">|</span>
       格子里的「2/3」= 这个难度做对 2 次共 3 次；「—」表示还没做过这个难度
     </div>
@@ -1672,6 +1701,8 @@ function addNodeInteractive(): void {
     parentId: parentId ?? null,
     kind: 'concept',
     examWeight: 0.5,
+    // 用户手动加的节点，权重就是个占位值，不能说成"AI 估计"更不能说成考频
+    weightSource: 'manual',
     prereq: [],
     confusable: [],
     brief: ''
