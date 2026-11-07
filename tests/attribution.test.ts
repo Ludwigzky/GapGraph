@@ -5,11 +5,48 @@ import {
   attributionLine,
   dominantReason,
   errorBreakdown,
+  reasonsFor,
   suggestionFor
 } from '../src/main/domain/attribution'
 import { blankMastery } from '../src/main/domain/queue'
 
 const NOW = Date.UTC(2026, 0, 10)
+
+describe('错因预设按学科换说法', () => {
+  it('数学保留原来的说法', () => {
+    const labels = reasonsFor('数学').map((r) => r.label)
+    expect(labels).toContain('算错了')
+    expect(labels).toContain('公式记错')
+  })
+
+  it('英语不会冒出"公式记错"这种数学词', () => {
+    const labels = reasonsFor('英语').map((r) => r.label).join(' ')
+    expect(labels).not.toContain('公式')
+    expect(labels).not.toContain('算错了')
+    expect(labels).toContain('词义不认识')
+  })
+
+  it('key 集合必须保持不变：掌握度的惩罚系数是按 key 定的', () => {
+    const keys = reasonsFor('英语').map((r) => r.key).sort()
+    expect(keys).toEqual(['calc', 'concept', 'formula', 'guess', 'method', 'misread'])
+  })
+
+  it('没见过的学科退回中性说法，不硬套数学', () => {
+    const labels = reasonsFor('地理').map((r) => r.label).join(' ')
+    expect(labels).not.toContain('公式记错')
+    expect(labels).not.toContain('算错了')
+    expect(labels).toContain('粗心')
+  })
+
+  it('带前缀的写法也能认出来（高中英语 / 英语(新高考)）', () => {
+    expect(reasonsFor('高中英语').map((r) => r.label)).toContain('词义不认识')
+    expect(reasonsFor('英语（新高考）').map((r) => r.label)).toContain('词义不认识')
+  })
+
+  it('不给学科时按数学口径（内置章节就是数学）', () => {
+    expect(reasonsFor(undefined).map((r) => r.label)).toContain('算错了')
+  })
+})
 
 const mkNode = (id: string, prereq: string[] = []): KNode => ({
   id,

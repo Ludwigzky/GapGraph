@@ -11,6 +11,81 @@ export const REASONS: { key: Exclude<ErrorReason, null>; label: string; hint: st
   { key: 'guess', label: '蒙的', hint: '基本靠猜' }
 ]
 
+type ReasonKey = Exclude<ErrorReason, null>
+
+/**
+ * 同一套 key，不同学科换说法。
+ *
+ * key 不能变——掌握度的惩罚系数是按 key 定的（算错了扣得少、概念不清扣得多）。
+ * 变的是给人看的标签：英语卷子上不会出现"公式记错"这种选项。
+ */
+const BY_SUBJECT: Record<string, Partial<Record<ReasonKey, { label: string; hint: string }>>> = {
+  数学: {}, // 默认就是数学口径
+  物理: {
+    calc: { label: '算错了', hint: '式子列对了，数字或代数出错' },
+    formula: { label: '公式记错', hint: '用错了公式或适用条件' },
+    method: { label: '模型建错', hint: '受力/过程分析没理清' },
+    misread: { label: '看错题', hint: '漏了条件，或单位、方向搞反' }
+  },
+  化学: {
+    calc: { label: '计算错', hint: '物质的量、浓度这类算错' },
+    formula: { label: '方程式写错', hint: '配平、条件、产物不对' },
+    method: { label: '推断断了', hint: '思路走到一半推不下去' },
+    misread: { label: '条件漏看', hint: '漏了"过量""标况"这类前提' }
+  },
+  生物: {
+    calc: { label: '算错了', hint: '遗传比例一类算错' },
+    formula: { label: '概念记混', hint: '把相近的过程记串了' },
+    method: { label: '不会分析', hint: '不知道怎么从题干推结论' },
+    misread: { label: '图/表看错', hint: '曲线、表格的趋势读反了' }
+  },
+  英语: {
+    calc: { label: '粗心', hint: '明明会，手滑选错' },
+    formula: { label: '语法点不熟', hint: '时态、从句这类没掌握' },
+    concept: { label: '词义不认识', hint: '单词或短语不认识' },
+    method: { label: '句子没读懂', hint: '长难句结构没理清' },
+    misread: { label: '审题偏差', hint: '问的和他答的不是一回事' },
+    guess: { label: '凭语感猜的', hint: '说不出依据' }
+  },
+  语文: {
+    calc: { label: '笔误', hint: '写错字、抄错' },
+    formula: { label: '手法记混', hint: '表现手法、文体知识记错' },
+    concept: { label: '文言字词不懂', hint: '实词、虚词、句式没过关' },
+    method: { label: '没踩到点', hint: '答题角度不对，答不到给分点' },
+    misread: { label: '审题偏差', hint: '问的是"分析"，答成了"概括"' }
+  }
+}
+
+/** 学科对不上时的说法，避免出现明显不属于该学科的词 */
+const GENERIC: Record<ReasonKey, { label: string; hint: string }> = {
+  calc: { label: '粗心算错', hint: '思路对，只是手滑' },
+  misread: { label: '看错题', hint: '漏了条件或看串了' },
+  formula: { label: '知识点记错', hint: '该用的定理/规则记错了' },
+  concept: { label: '概念不清', hint: '这个点本身没搞明白' },
+  method: { label: '方法不会', hint: '不知道该用哪套办法' },
+  guess: { label: '蒙的', hint: '基本靠猜' }
+}
+
+/**
+ * 按学科取错因选项。
+ * @param subject 学科名（"数学"/"英语"…），缺省或未知时用中性说法
+ */
+export function reasonsFor(subject?: string): { key: ReasonKey; label: string; hint: string }[] {
+  const s = String(subject ?? '').trim()
+  // 没给学科 = 内置章节（数学），保持数学口径
+  if (!s) return REASONS
+  // 支持"高中英语""英语（新高考）"这类带前缀的写法
+  const hit = Object.keys(BY_SUBJECT).find((k) => s.includes(k))
+  return REASONS.map((r) => {
+    // 学科认不出来：一律退回中性说法，绝不硬套数学
+    if (!hit) return { key: r.key, ...GENERIC[r.key] }
+    // 数学本身就是默认口径，原样返回
+    if (hit === '数学') return r
+    const over = BY_SUBJECT[hit][r.key]
+    return { key: r.key, ...(over ?? GENERIC[r.key]) }
+  })
+}
+
 export const REASON_LABEL: Record<string, string> = Object.fromEntries(
   REASONS.map((r) => [r.key, r.label])
 )

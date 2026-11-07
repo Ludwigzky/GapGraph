@@ -81,7 +81,7 @@ export interface Mastery {
   lastAt: number | null
 }
 
-export type SelfConfidence = 'sure' | 'unsure'
+export type SelfConfidence = 'sure' | 'unsure' | 'unknown'
 
 export type ErrorReason =
   | 'calc' | 'formula' | 'misread' | 'concept' | 'method' | 'guess' | null

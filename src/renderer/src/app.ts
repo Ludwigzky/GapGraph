@@ -13,7 +13,7 @@ import {
   type DiagSummary
 } from '../../main/domain/diagnostic'
 import { BANDS, buildHeatmap, summarizeHeat } from '../../main/domain/heatmap'
-import { REASONS, attributionLine } from '../../main/domain/attribution'
+import { attributionLine, reasonsFor } from '../../main/domain/attribution'
 import aiJson from '../../../resources/ai/gaokao-math-function.json'
 import { addCard, isSaved, loadCards, removeCard } from './cards'
 import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
@@ -108,7 +108,7 @@ interface Api {
     questionId: string
     answer: string
     durationMs: number
-    selfConfidence: 'sure' | 'unsure'
+    selfConfidence: 'sure' | 'unsure' | 'unknown'
     errorReason: ErrorReason
   }): Promise<SubmitResult & { today: Task[]; overview: Overview }>
   check(questionId: string, answer: string): Promise<{ correct: boolean }>
@@ -365,12 +365,13 @@ const SUBJECTS = ['数学', '物理', '化学', '英语']
 
 function renderWizard(): void {
   const box = $('#wizard')
-  if (!wizard) wizard = { exam: '', subject: '数学', chapter: '', customChapter: '', busy: false }
+  // 学科不预填：以前默认"数学"，用户容易以为已经选过而直接下一步
+  if (!wizard) wizard = { exam: '', subject: '', chapter: '', customChapter: '', busy: false }
   const w = wizard
   const packs = listPacks()
   const ai = endpointStatus()
   const hasProxy = ai.reachable && ai.supportsPack
-  const step = !w.exam ? 1 : !w.chapter && !w.customChapter ? 2 : 3
+  const step = !w.exam ? 1 : !w.subject ? 2 : !w.chapter && !w.customChapter ? 3 : 4
 
   box.innerHTML = `
     <div class="gsheet" style="width:min(620px,92vw)">
@@ -401,8 +402,8 @@ function renderWizard(): void {
       }
 
       ${
-        step >= 2
-          ? `<div class="wstep ${step === 3 ? 'cur' : ''}">
+        step >= 3
+          ? `<div class="wstep ${step === 4 ? 'cur' : ''}">
               <div class="wlabel">3 · 现在学哪一章</div>
               ${packs
                 .map(
@@ -1209,6 +1210,9 @@ function renderPanel(): void {
             <input id="ask-input" placeholder="比如：为什么这里要取对数？" ${st?.loading ? 'disabled' : ''} />
             <button class="primary small" id="ask-btn" ${st?.loading ? 'disabled' : ''}>${st?.loading ? '思考中…' : '问'}</button>
           </div>
+          <div class="askchips" style="margin-top:8px">${nodeAskPresets(n)
+            .map((p) => `<button class="askchip" data-panel-ask="${esc(p)}" ${st?.loading ? 'disabled' : ''}>${esc(p)}</button>`)
+            .join('')}</div>
           ${
             st?.error
               ? `<div class="hint" style="color:#a52222;margin-top:8px">${esc(st.error)}</div>`
@@ -1338,6 +1342,14 @@ function renderPanel(): void {
     askBtn.addEventListener('click', () => void submitAsk())
     box.querySelector('#ask-input')?.addEventListener('keydown', (e) => {
       if ((e as KeyboardEvent).key === 'Enter') void submitAsk()
+    })
+    // 预设问题：填进去直接问，省得自己想怎么措辞
+    box.querySelectorAll<HTMLElement>('[data-panel-ask]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const input = box.querySelector<HTMLInputElement>('#ask-input')
+        if (input) input.value = chip.dataset.panelAsk ?? ''
+        void submitAsk()
+      })
     })
   }
   box.querySelectorAll<HTMLElement>('#rate .chip').forEach((c) => {
@@ -1716,7 +1728,8 @@ interface Session {
   taskId: string | null
   startedAt: number
   answer: string
-  confidence: 'sure' | 'unsure'
+  /** null = 用户还没选；不要默认成 sure，否则"确定但答错"的判定会被白送 */
+  confidence: 'sure' | 'unsure' | null
   /** answering → (错了才进 reason) → feedback */
   phase: 'answering' | 'reason' | 'feedback'
   last?: SubmitResult
@@ -1807,7 +1820,32 @@ async function askAboutQuestion(q: Question): Promise<void> {
   renderModal()
 }
 
-const ASK_PRESETS = ['这题为什么错', '为什么答案是这个', '考的是哪个考点', '换个方法再讲一遍']
+/**
+ * 追问的预设问题按"这道题 + 这个考点"现场生成。
+ * 以前是四个写死的通用句子（"这题为什么错"），换个学科、换个考点就都一样，
+ * 等于没帮上忙。现在至少带上考点名、题型和这次对错。
+ */
+function askPresetsFor(q: Question, nodeName: string, correct?: boolean): string[] {
+  const name = nodeName || '这个考点'
+  const out: string[] = []
+  if (correct === false) out.push('我错在哪一步')
+  else if (correct === true) out.push('这题还有更快的做法吗')
+  else out.push('这题的关键一步是什么')
+
+  if (q.type === 'single') out.push('其他选项为什么不对')
+  else if (q.type === 'judge') out.push(`这题为什么判「${String(q.answer) === 'true' ? '对' : '错'}」`)
+  else out.push('答案还有别的写法吗')
+
+  out.push(`「${name}」在这题里怎么用`)
+  out.push(`用更简单的例子讲「${name}」`)
+  return out.slice(0, 4)
+}
+
+/** 右栏（针对整个考点）的预设问题 */
+function nodeAskPresets(n: KNode): string[] {
+  const name = n.name
+  return [`「${name}」到底在讲什么`, `「${name}」最容易错在哪`, `「${name}」和前置的关系`, `给我一道「${name}」的例题`]
+}
 
 function startDiagnostic(): void {
   if (questions.length === 0) {
@@ -1824,7 +1862,7 @@ function startDiagnostic(): void {
     taskId: null,
     startedAt: Date.now(),
     answer: '',
-    confidence: 'unsure',
+    confidence: null,
     phase: 'answering',
     diag
   }
@@ -1852,7 +1890,7 @@ async function closeDiagnostic(goWeakest: boolean): Promise<void> {
 
 function openPractice(ids: string[], nodeId: string | null, taskId: string | null): void {
   if (!ids.length) return
-  session = { ids, index: 0, taskId, startedAt: Date.now(), answer: '', confidence: 'sure', phase: 'answering' }
+  session = { ids, index: 0, taskId, startedAt: Date.now(), answer: '', confidence: null, phase: 'answering' }
   if (nodeId) selectNode(nodeId)
   renderModal()
 }
@@ -1938,17 +1976,19 @@ function renderModal(): void {
     ? `<div class="reasonbox">
          <div class="rtitle">这题错在哪？<span>选一个，软件据此决定下次推什么</span></div>
          <div class="rchips">
-           ${REASONS.map((r) => `<button class="rc" data-reason="${r.key}" title="${r.hint}">${r.label}</button>`).join('')}
+           ${reasonsFor(pack.meta?.subject).map((r) => `<button class="rc" data-reason="${r.key}" title="${r.hint}">${r.label}</button>`).join('')}
          </div>
        </div>`
     : ''
 
   // 追问只在交卷后出现：没作答就问，这题等于没做
   const askTurns = answered ? asksOf(q.id) : []
+  const qNode = pack.nodes.find((x) => x.id === q.tags[0]?.nodeId)
+  const askChips = askPresetsFor(q, qNode?.name ?? '', answered ? session.last?.correct : undefined)
   const askHtml = answered
     ? `<div class="askbox">
          <div class="askhead"><b>对这题还有疑问？</b><span>已作答，可以追问</span></div>
-         <div class="askchips">${ASK_PRESETS.map((p) => `<button class="askchip" data-ask="${p}">${p}</button>`).join('')}</div>
+         <div class="askchips">${askChips.map((p) => `<button class="askchip" data-ask="${p}">${p}</button>`).join('')}</div>
          <div class="askrow">
            <input id="qask-input" class="askinput" placeholder="具体问一句，比如：为什么不能用判别式？"
              value="${esc(askDraft).replace(/"/g, '&quot;')}" ${askBusy ? 'disabled' : ''} />
@@ -1985,7 +2025,7 @@ function renderModal(): void {
             ? `<button class="primary" id="next">${session.index + 1 < total ? '下一题' : '完成'}</button>`
             : askingReason
               ? `<span class="hint">跳过也能记，只是少了这条线索</span><div class="spacer"></div><button class="ghost small" id="skip-reason">跳过</button>`
-              : `<div class="conf-toggle">
+              : `<div class="conf-toggle" data-picked="${session.confidence ? '1' : '0'}">
                  <button class="small" data-conf="sure" aria-pressed="${session.confidence === 'sure'}">我很确定</button>
                  <button class="small" data-conf="unsure" aria-pressed="${session.confidence === 'unsure'}">不确定</button>
                </div>
@@ -2062,7 +2102,7 @@ function renderModal(): void {
     if (session.index + 1 < session.ids.length) {
       session.index++
       session.answer = ''
-      session.confidence = session.diag ? 'unsure' : 'sure'
+      session.confidence = null
       session.phase = 'answering'
       session.startedAt = Date.now()
       renderModal()
@@ -2095,7 +2135,7 @@ async function commitAnswer(reason: ErrorReason): Promise<void> {
     questionId: q.id,
     answer: session.answer,
     durationMs,
-    selfConfidence: session.confidence,
+    selfConfidence: session.confidence ?? 'unknown',
     errorReason: reason
   })
   session.last = r
