@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.2.0'
+export const GUIDE_VERSION = '1.2.1'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.2.1',
+    date: '2026-11-06',
+    items: [
+      '修拖动手感：原来每动一下鼠标就跑一轮物理，拖得快就炸；现在改成固定每秒 60 帧的模拟，跟鼠标事件频率无关。',
+      '相邻节点的位移限速到每帧 4.5 像素——是"被推开"，不是"瞬移"。',
+      '节点避让改成软推力：拖动时轻轻挤开，松手后加大力度收敛，既不会抖也不会留下永久重叠。'
+    ]
+  },
   {
     version: '1.2.0',
     date: '2026-11-06',

@@ -120,7 +120,13 @@ function overlap1d(aMin: number, aMax: number, bMin: number, bMax: number): numb
  * 每次取"重叠更少的那个轴"推，位移最小、视觉最自然。
  * 返回是否还有重叠。
  */
-export function separateBoxes(boxes: Box[], gap = 14, iterations = 40, bounds?: { w: number; h: number }): boolean {
+export function separateBoxes(
+  boxes: Box[],
+  gap = 14,
+  iterations = 40,
+  bounds?: { w: number; h: number },
+  stiffness = 1
+): boolean {
   let moved = false
   for (let it = 0; it < iterations; it++) {
     let any = false
@@ -133,12 +139,15 @@ export function separateBoxes(boxes: Box[], gap = 14, iterations = 40, bounds?: 
         if (ox <= 0 || oy <= 0) continue
         any = true
         moved = true
+        // stiffness < 1 时只推一部分：连续动画里这样才像"排斥"，
+        // 一次推满会变成瞬移，手感很跳。
+        const k = Math.max(0.05, Math.min(1, stiffness))
         if (ox < oy) {
-          const push = (ox / 2) * (a.x <= b.x ? -1 : 1)
+          const push = (ox / 2) * k * (a.x <= b.x ? -1 : 1)
           a.x += push
           b.x -= push
         } else {
-          const push = (oy / 2) * (a.y <= b.y ? -1 : 1)
+          const push = (oy / 2) * k * (a.y <= b.y ? -1 : 1)
           a.y += push
           b.y -= push
         }
@@ -153,6 +162,20 @@ export function separateBoxes(boxes: Box[], gap = 14, iterations = 40, bounds?: 
     if (!any) break
   }
   return moved
+}
+
+/** 快速判断是否还有重叠（动画循环用它决定要不要继续跑） */
+export function hasOverlap(boxes: Box[], gap = 0): boolean {
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]
+      const b = boxes[j]
+      const ox = overlap1d(a.x - a.w / 2, a.x + a.w / 2, b.x - b.w / 2, b.x + b.w / 2) + gap
+      const oy = overlap1d(a.y - a.h / 2, a.y + a.h / 2, b.y - b.h / 2, b.y + b.h / 2) + gap
+      if (ox > 0 && oy > 0) return true
+    }
+  }
+  return false
 }
 
 export interface ForceNode extends Box {
@@ -178,7 +201,7 @@ export interface ForceEdge {
 export function forceStep(
   nodes: ForceNode[],
   edges: ForceEdge[],
-  opts: { w: number; h: number; ideal?: number; gravity?: number; damping?: number }
+  opts: { w: number; h: number; ideal?: number; gravity?: number; damping?: number; maxStep?: number }
 ): void {
   const w = opts.w
   const h = opts.h
@@ -245,8 +268,8 @@ export function forceStep(
     }
     nd.vx *= damping
     nd.vy *= damping
-    // 单步位移限幅，防止早期飞出去
-    const maxStep = 60
+    // 单步位移限幅：初始化时可以迈大步快速收敛，动画里必须小步，否则像瞬移
+    const maxStep = opts.maxStep ?? 60
     nd.x += Math.max(-maxStep, Math.min(maxStep, nd.vx))
     nd.y += Math.max(-maxStep, Math.min(maxStep, nd.vy))
     nd.x = Math.max(nd.w / 2, Math.min(w - nd.w / 2, nd.x))

@@ -1,6 +1,6 @@
 import type { KNode, Mastery, Relation } from '../../shared/types'
 import { masteryScore } from '../../shared/mastery'
-import { forceStep, separateBoxes, textWidth, type ForceEdge, type ForceNode } from '../../main/domain/layout'
+import { forceStep, hasOverlap, separateBoxes, textWidth, type ForceEdge, type ForceNode } from '../../main/domain/layout'
 
 export type GraphMode = 'structure' | 'gap'
 
@@ -104,6 +104,10 @@ export class KnowledgeGraph {
   private ty = 0
 
   private dragNode: { id: string; grabX: number; grabY: number } | null = null
+  /** 拖动目标位置：指针只负责改这个，节点由模拟循环去跟，避免被事件频率带飞 */
+  private dragTarget: { id: string; x: number; y: number } | null = null
+  private simRaf = 0
+  private simFrames = 0
   private panFrom: { x: number; y: number; tx: number; ty: number } | null = null
   private downAt: { x: number; y: number } | null = null
   private edgeEls: { spec: EdgeSpec; line: SVGLineElement }[] = []
@@ -313,11 +317,9 @@ export class KnowledgeGraph {
       const p = this.toGraph(e.clientX, e.clientY)
       const dotX = Math.max(b.r, Math.min(W - b.r, p.x - this.dragNode.grabX))
       const dotY = Math.max(b.h / 2, Math.min(H - b.h / 2, p.y - this.dragNode.grabY))
-      b.x = dotX + b.dx
-      b.y = dotY
-      // 拖的同时让周围实时让开——这是"碰撞箱"的手感来源
-      this.relaxAround(b.id)
-      this.syncAll()
+      // 只记目标，不直接落位：模拟循环按固定节奏去跟，手感才稳
+      this.dragTarget = { id: this.dragNode.id, x: dotX, y: dotY }
+      this.startSim()
       return
     }
     if (!this.panFrom) return
@@ -331,16 +333,12 @@ export class KnowledgeGraph {
       const b = this.boxes.get(this.dragNode.id)
       const id = this.dragNode.id
       this.dragNode = null
+      this.dragTarget = null
       this.gNode.querySelector('.dragging')?.classList.remove('dragging')
       if (b) {
         this.handlers.onMoveNode?.(id, Math.round(b.x - b.dx), Math.round(b.y))
-        // 松手后再收敛几轮，让它停在稳定的位置
-        const list = this.listOfVisible()
-        const edges = this.physicsEdges(new Set(list.map((x) => x.id)))
-        const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.5
-        for (let i = 0; i < 24; i++) forceStep(list, edges, { w: W, h: H, ideal })
-        separateBoxes(list, 16, 18)
-        this.render()
+        // 松手后继续跑模拟，让它自己"软"下来，而不是啪一下停住
+        this.startSim()
       }
       this.panFrom = null
       this.downAt = null
@@ -355,22 +353,72 @@ export class KnowledgeGraph {
     this.downAt = null
   }
 
-  /** 拖动时只算"被拖的这个不动，其它让开"，两三轮就够 */
-  private relaxAround(activeId: string): void {
+  /* ---------------- 模拟循环 ---------------- */
+
+  private startSim(): void {
+    if (this.simRaf) return
+    this.simFrames = 0
+    this.simRaf = requestAnimationFrame(this.simTick)
+  }
+
+  private simTick = (): void => {
+    this.simRaf = 0
+    if (this.simStep()) this.simRaf = requestAnimationFrame(this.simTick)
+  }
+
+  /**
+   * 一帧的模拟。三个关键点决定了"力场感"：
+   *  1. 固定 60Hz，跟指针事件频率无关（否则拖得越快，算得越多，越容易炸）
+   *  2. 单步位移限幅 4.5px —— 邻居是"被推开"，不是"瞬移过去"
+   *  3. 分离器只推 35% —— 留出回弹，看起来像弹簧不是硬碰撞
+   */
+  private simStep(): boolean {
     const list = this.listOfVisible()
-    const box = this.boxes.get(activeId)
-    if (box) box.pinned = true
-    const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
-    const ideal = Math.sqrt((W * H) / Math.max(1, list.length)) * 0.5
-    for (let i = 0; i < 3; i++) {
-      forceStep(list, edges, { w: W, h: H, ideal })
-      separateBoxes(list, 14, 4)
+    if (!list.length) return false
+    const byId = new Map(list.map((b) => [b.id, b]))
+
+    if (this.dragTarget) {
+      const b = byId.get(this.dragTarget.id)
+      if (b) {
+        b.x = this.dragTarget.x + b.dx
+        b.y = this.dragTarget.y
+        b.vx = 0
+        b.vy = 0
+        b.pinned = true
+      }
     }
-    if (box) {
-      // 被拖的节点不能被推走
-      box.vx = 0
-      box.vy = 0
+
+    const ids = new Set(list.map((b) => b.id))
+    const edges = this.physicsEdges(ids)
+    const ideal = Math.sqrt((W * H) / list.length) * 0.5
+    forceStep(list, edges, { w: W, h: H, ideal, damping: 0.9, maxStep: 4.5 })
+
+    // 分离只推一部分，但不能把用户摆好的节点推走：先记下，推完再放回去。
+    // 拖动时用软推力（手感像磁铁），松手后加大推力——否则弹簧拉力和分离力
+    // 会在稳态下打个平手，留一点永久重叠。
+    const settling = !this.dragTarget
+    const pinned = list.filter((b) => b.pinned).map((b) => ({ b, x: b.x, y: b.y }))
+    separateBoxes(list, 12, settling ? 3 : 2, { w: W, h: H }, settling ? 0.8 : 0.35)
+    for (const p of pinned) {
+      p.b.x = p.x
+      p.b.y = p.y
     }
+
+    this.syncAll()
+
+    let energy = 0
+    for (const b of list) energy += Math.abs(b.vx) + Math.abs(b.vy)
+    // 关键：位移小的节点不一定没重叠（分离器只改位置不改速度），
+    // 所以"还有重叠"也必须让循环继续，直到解开为止。
+    const overlapping = hasOverlap(list, 8)
+    const busy = energy > 1.2 || overlapping || !!this.dragTarget
+    if (!busy) return false
+    if (this.simFrames++ > 400) {
+      // 兜底：极少数情况下（比如用户把两个点叠死）不要无限转下去
+      this.simFrames = 0
+      return false
+    }
+    return true
   }
 
   private applyCam(): void {

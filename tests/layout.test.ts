@@ -139,4 +139,42 @@ describe('力导向：相关的靠拢，无关的推开', () => {
     for (let i = 0; i < 40; i++) forceStep(nodes, [], { w: 1000, h: 600 })
     expect(Math.hypot(nodes[0].x - nodes[1].x, nodes[0].y - nodes[1].y)).toBeGreaterThan(5)
   })
+
+  it('单步位移被限幅：一帧不会瞬移（动画手感的关键）', () => {
+    const nodes = [mkNode('a', 100, 300), mkNode('b', 900, 300)]
+    const before = { x: nodes[0].x, y: nodes[0].y }
+    forceStep(nodes, [{ a: 'a', b: 'b', strength: 3 }], { w: 1000, h: 600, maxStep: 4.5 })
+    const moved = Math.hypot(nodes[0].x - before.x, nodes[0].y - before.y)
+    expect(moved).toBeLessThanOrEqual(4.6)
+  })
+
+  it('限幅后连续多帧仍然能收敛（不会因为步子小就卡住）', () => {
+    const nodes = [mkNode('a', 100, 300), mkNode('b', 900, 300)]
+    const before = Math.abs(nodes[0].x - nodes[1].x)
+    for (let i = 0; i < 200; i++)
+      forceStep(nodes, [{ a: 'a', b: 'b', strength: 3 }], { w: 1000, h: 600, maxStep: 4.5 })
+    expect(Math.abs(nodes[0].x - nodes[1].x)).toBeLessThan(before)
+  })
+})
+
+describe('软分离：一次只推一部分，才像排斥', () => {
+  const mk = (id: string, x: number, y: number): Box => ({ id, x, y, w: 80, h: 34 })
+
+  it('stiffness=0.35 时单次只推开一小部分', () => {
+    const a = mk('a', 100, 100)
+    const b = mk('b', 100, 100)
+    separateBoxes([a, b], 0, 1, undefined, 0.35)
+    const gap = Math.hypot(a.x - b.x, a.y - b.y)
+    // 完全重合时只错开一点点，不是一下推到底
+    expect(gap).toBeGreaterThan(0)
+    expect(gap).toBeLessThan(30)
+  })
+
+  it('多帧累积后仍然能完全分开', () => {
+    const boxes = [mk('a', 100, 100), mk('b', 100, 100)]
+    for (let i = 0; i < 60; i++) separateBoxes(boxes, 10, 2, undefined, 0.35)
+    const overlapX = Math.abs(boxes[0].x - boxes[1].x) < 80
+    const overlapY = Math.abs(boxes[0].y - boxes[1].y) < 34
+    expect(overlapX && overlapY).toBe(false)
+  })
 })
