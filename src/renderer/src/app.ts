@@ -861,13 +861,10 @@ function mount(): void {
           <button data-mode="gap" aria-pressed="false">② 缺口</button>
         </div>
         <button class="ghost small h-only" id="heat-sort">缺口优先</button>
-        <button class="ghost small g-only" id="guide-btn">指南</button>
-        <button class="ghost small g-only" id="fold" aria-pressed="true">折叠</button>
-        <button class="ghost small g-only" id="phys-btn">力学</button>
-        <button class="ghost small g-only" id="relayout">重排</button>
-        <button class="ghost small g-only" id="add-node">＋考点</button>
         <button class="ghost small" id="diag">摸底</button>
         <button class="ghost small" id="cards-btn">卡片 0</button>
+        <button class="ghost small g-only" id="guide-btn">指南</button>
+        <button class="ghost small g-only" id="add-node">＋考点</button>
         <button class="ghost small" id="chapter-btn">章节</button>
         <button class="ghost small" id="lobby-btn">大厅</button>
         <button class="ghost small" id="settings-btn">设置</button>
@@ -878,6 +875,11 @@ function mount(): void {
         <section id="stage">
           <button class="edge-tab" id="tab-left" title="收起 / 展开今日">‹</button>
           <button class="edge-tab" id="tab-right" title="收起 / 展开讲解">›</button>
+          <div class="stage-tools g-only">
+            <button class="ghost small" id="fold" aria-pressed="true" title="只看两层，收起深层考点">折叠</button>
+            <button class="ghost small" id="phys-btn" title="调整图谱的手感参数">力学</button>
+            <button class="ghost small" id="relayout" title="清掉手工位置，重新排一次">重排</button>
+          </div>
           <svg id="graph" data-mode="structure"></svg>
           <div id="phys" class="physpanel"></div>
           <div class="legend">

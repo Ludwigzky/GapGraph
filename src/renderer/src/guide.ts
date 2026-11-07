@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.10.0'
+export const GUIDE_VERSION = '1.10.1'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.10.1',
+    date: '2026-11-07',
+    items: [
+      '「折叠 / 力学 / 重排」从顶栏挪到了知识图右上角，跟图放在一起，手不用来回跑。',
+      '顶栏顺序理顺：摸底、卡片紧跟缺口后面；指南、＋考点、章节、大厅、设置依次排在后面。',
+      '力学面板自动挂在工具条下方，不会和按钮压在一起。'
+    ]
+  },
   {
     version: '1.10.0',
     date: '2026-11-07',

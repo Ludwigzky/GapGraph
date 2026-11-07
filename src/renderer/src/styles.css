@@ -281,13 +281,32 @@ aside, section { min-height: 0; overflow: auto; }
   stroke-linejoin: round;
 }
 
-/* 力学面板（仿 Obsidian 右侧那个） */
+/* 知识图右上角的工具条：折叠 / 力学 / 重排 */
+.stage-tools {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 6;
+}
+.stage-tools button {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(4px);
+}
+.stage-tools button[aria-pressed='true'] {
+  border-color: var(--ink);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 力学面板（仿 Obsidian 右侧那个）：挂在工具条下面，避免互相压住 */
 .physpanel {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 52px;
+  right: 12px;
   width: 246px;
-  max-height: calc(100% - 90px);
+  max-height: calc(100% - 120px);
   overflow: auto;
   display: none;
   background: rgba(255, 255, 255, 0.97);
