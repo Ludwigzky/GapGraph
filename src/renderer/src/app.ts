@@ -18,7 +18,8 @@ import aiJson from '../../../resources/ai/gaokao-math-function.json'
 import { addCard, isSaved, loadCards, removeCard } from './cards'
 import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
 import { addToBank } from './qbank'
-import { currentPack, listPacks, packProgress, relTime, removeCustomPack, resolvePack, saveCustomPack, setActivePackId, markStudied } from './packs'
+import { currentPack, listPacks, packProgress, questionsOfPack, relTime, removeCustomPack, renamePack, resolvePack, saveCustomPack, saveMergedPack, setActivePackId, markStudied, stateOfPack } from './packs'
+import { canMerge, mergeSources } from '../../main/domain/merge'
 import { normalizeGeneratedPack } from '../../main/domain/pack'
 
 /** 实时提问的状态（只保留当前节点的） */
@@ -48,7 +49,8 @@ async function ensureQuestions(nodeId: string, need = 3): Promise<boolean> {
     const got = await generateQuestions(node, want, [2, 3, 4].slice(0, want), {
       exam: pack.meta?.exam ?? '',
       subject: pack.meta?.subject ?? pack.subject ?? '',
-      chapter: pack.meta?.chapter ?? pack.title ?? ''
+      // 融合板块里，出题上下文用它原本所属的章节，避免串到别的章
+      chapter: node.origin ?? pack.meta?.chapter ?? pack.title ?? ''
     })
     if (!got.length) return false
     const saved = addToBank(pack.packId, got, nodeId)
@@ -561,29 +563,45 @@ function closeModal(): void {
 
 /* ---------------- 大厅 ---------------- */
 
+/** 大厅里的多选（用于融合板块），只存在内存里 */
+let picked = new Set<string>()
+
 function renderHome(): void {
   const box = $('#home')
   const packs = listPacks()
   const cards = loadCards()
   const recent = cards.sort((a, b) => b.at - a.at).slice(0, 3)
+  // 已删除/已融合掉的板块要从选中集合里踢出去
+  picked = new Set([...picked].filter((id) => packs.some((p) => p.id === id)))
+
+  const mergeCheck = (() => {
+    if (picked.size < 2) return { ok: false, reason: '勾选 2 个同学科的板块，就能把它们融合成一个' }
+    const chosen = [...picked].map((id) => resolvePack(id)).filter((p): p is NonNullable<typeof p> => !!p)
+    return canMerge(chosen)
+  })()
 
   const packCards = packs
     .map((entry) => {
       const pack = resolvePack(entry.id)
       if (!pack) return ''
       const prog = packProgress(entry.id)
-      const meta = pack.meta ?? { exam: '其他', subject: pack.subject, chapter: entry.title }
       const pct = prog.total ? Math.round((prog.measured / prog.total) * 100) : 0
-      return `<div class="pcard" data-pack-card="${entry.id}">
-        <div class="pmeta">${esc(meta.exam)} · ${esc(meta.subject)}</div>
-        <div class="ptitle">${esc(meta.chapter)}</div>
+      const on = picked.has(entry.id)
+      const merged = entry.id.startsWith('merge-')
+      return `<div class="pcard ${on ? 'picked' : ''}" data-pack-card="${entry.id}">
+        <div class="pmeta">
+          ${esc(entry.exam)} · ${esc(entry.subject)}
+          <button class="pick ${on ? 'on' : ''}" data-pick="${entry.id}" title="${on ? '取消选择' : '选中（用于融合）'}">${on ? '✓' : '＋'}</button>
+        </div>
+        <div class="ptitle">${esc(entry.chapter)}</div>
         <div class="pbar"><i style="width:${pct}%"></i></div>
         <div class="pstat">
           已测 ${prog.measured}/${prog.total} · ${relTime(prog.lastAt)}
-          ${entry.builtin ? '' : ' · AI 生成'}
+          ${entry.builtin ? '' : merged ? ' · 融合板块' : ' · AI 生成'}
         </div>
         <div class="pactions">
           <button class="primary small" data-enter="${entry.id}">继续学习</button>
+          <button class="ghost small" data-rename="${entry.id}">改名</button>
           ${entry.builtin ? '' : `<button class="ghost small" data-drop="${entry.id}">删除</button>`}
         </div>
       </div>`
@@ -607,6 +625,24 @@ function renderHome(): void {
         </div>
         <button class="primary" id="h-add">+ 添加板块</button>
       </div>
+
+      ${
+        picked.size
+          ? `<div class="mergebox">
+               <div class="mergeinfo">
+                 <b>已选 ${picked.size} 个板块</b>
+                 <span class="${mergeCheck.ok ? 'okline' : 'badline'}">${
+                   mergeCheck.ok ? '同学科，可以融合成一张图' : esc(mergeCheck.reason ?? '')
+                 }</span>
+               </div>
+               <div class="askrow" style="margin-top:10px">
+                 <input id="merge-name" placeholder="给融合后的板块取个名字，比如「烃类化合物」" />
+                 <button class="primary small" id="merge-go" ${mergeCheck.ok ? '' : 'disabled'}>融合</button>
+                 <button class="ghost small" id="merge-cancel">取消</button>
+               </div>
+             </div>`
+          : ''
+      }
 
       ${
         packs.length
@@ -645,6 +681,21 @@ function renderHome(): void {
   box.querySelectorAll<HTMLButtonElement>('[data-enter]').forEach((b) => {
     b.addEventListener('click', () => enterPack(b.dataset.enter as string))
   })
+  box.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const id = b.dataset.pick as string
+      if (picked.has(id)) picked.delete(id)
+      else picked.add(id)
+      renderHome()
+    })
+  })
+  box.querySelectorAll<HTMLButtonElement>('[data-rename]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      openRename(b.dataset.rename as string)
+    })
+  })
   box.querySelectorAll<HTMLButtonElement>('[data-drop]').forEach((b) => {
     b.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -654,6 +705,110 @@ function renderHome(): void {
         renderHome()
       }
     })
+  })
+  box.querySelector('#merge-cancel')?.addEventListener('click', () => {
+    picked.clear()
+    renderHome()
+  })
+  box.querySelector('#merge-go')?.addEventListener('click', () => void doMerge())
+}
+
+/* ---------------- 融合板块 ---------------- */
+
+async function doMerge(): Promise<void> {
+  const ids = [...picked]
+  const sources = ids
+    .map((id) => resolvePack(id))
+    .filter((p): p is NonNullable<typeof p> => !!p)
+  const gate = canMerge(sources)
+  if (!gate.ok) {
+    alert(gate.reason ?? '不能融合')
+    return
+  }
+  const input = $('#merge-name') as HTMLInputElement | null
+  const title = (input?.value ?? '').trim()
+  if (!title) {
+    alert('先给融合后的板块取个名字')
+    input?.focus()
+    return
+  }
+  const btn = $('#merge-go') as HTMLButtonElement | null
+  if (btn) {
+    btn.disabled = true
+    btn.textContent = '融合中…'
+  }
+  try {
+    const merged = mergeSources(
+      sources.map((p) => {
+        const st = stateOfPack(p)
+        return { pack: p, questions: questionsOfPack(p.packId), mastery: st.mastery, attempts: st.attempts }
+      }),
+      title
+    )
+    const state: AppState = {
+      settings: {
+        dailyMinutes: 40,
+        examDate: '2027-06-07',
+        totalScore: merged.pack.totalScore,
+        packId: merged.pack.packId
+      },
+      mastery: merged.mastery,
+      attempts: merged.attempts,
+      tasks: []
+    }
+    saveMergedPack(merged.pack, merged.questions, state)
+    picked.clear()
+    if (merged.warnings.length) alert(merged.warnings.join('\n'))
+    enterPack(merged.pack.packId)
+  } catch (e) {
+    alert(`融合失败：${(e as Error).message}`)
+    renderHome()
+  }
+}
+
+/* ---------------- 重命名板块 ---------------- */
+
+function openRename(packId: string): void {
+  const entry = listPacks().find((p) => p.id === packId)
+  if (!entry) return
+  const box = $('#cards')
+  box.innerHTML = `
+    <div class="gsheet" style="width:min(460px,92vw)">
+      <div class="ghead">
+        <div>
+          <h2>给板块改名</h2>
+          <div class="gsub">只改显示名，考点、题目、记录都不动</div>
+        </div>
+        <button class="ghost small" id="rn-close">✕</button>
+      </div>
+      <div class="sblock">
+        <input id="rn-input" class="sinput" style="width:100%" maxlength="40" value="${esc(entry.chapter)}" />
+      </div>
+      <div class="gfoot" style="justify-content:flex-end;gap:8px">
+        <button class="ghost small" id="rn-cancel">取消</button>
+        <button class="primary" id="rn-save">保存</button>
+      </div>
+    </div>
+  `
+  box.classList.add('open')
+  const input = box.querySelector<HTMLInputElement>('#rn-input')
+  input?.focus()
+  input?.select()
+  const close = (): void => {
+    box.classList.remove('open')
+    box.innerHTML = ''
+  }
+  box.querySelector('#rn-close')?.addEventListener('click', close)
+  box.querySelector('#rn-cancel')?.addEventListener('click', close)
+  const save = (): void => {
+    const v = input?.value.trim() ?? ''
+    if (v) renamePack(packId, v)
+    close()
+    renderHome()
+  }
+  box.querySelector('#rn-save')?.addEventListener('click', save)
+  input?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') save()
   })
 }
 
@@ -1626,6 +1781,27 @@ async function bootInner(): Promise<void> {
   if (hash === 'diag') startDiagnostic()
   else if (hash === 'heat') setView('heat')
   else if (hash === 'settings') renderSettings()
+  else maybeAutoDiagnostic()
+}
+
+/**
+ * 第一次进这个板块时，主动把摸底弹出来。
+ * 理由：空白的图没有任何信息量，用户不知道下一步该干嘛；
+ * 但**允许随时退出**——弹窗里的「退出摸底」会直接关掉，不会卡住。
+ * 每个板块只自动弹一次。
+ */
+function maybeAutoDiagnostic(): void {
+  if (!currentPack()) return
+  if (questions.length === 0) return
+  if (state.attempts.length > 0) return
+  const key = `gapgraph.diag.auto.${pack.packId}`
+  try {
+    if (localStorage.getItem(key)) return
+    localStorage.setItem(key, '1')
+  } catch {
+    return
+  }
+  startDiagnostic()
 }
 
 void boot()

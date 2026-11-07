@@ -15,6 +15,8 @@ export interface KNode {
   confusable: string[]
   /** 讲解（预写，v0.1 不走 AI） */
   brief?: string
+  /** 融合后的板块里，这个节点原本属于哪一章（出题时用它当上下文，防止串味） */
+  origin?: string
 }
 
 export interface Relation {

@@ -454,7 +454,35 @@ body[data-page="study"] #home { display: none; }
 .pbar { height: 5px; border-radius: 3px; background: #eef0f2; overflow: hidden; margin-bottom: 8px; }
 .pbar > i { display: block; height: 100%; background: var(--c5); border-radius: 3px; }
 .pstat { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
-.pactions { display: flex; gap: 8px; }
+.pactions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 板块多选（融合用） */
+.pmeta { display: flex; align-items: center; gap: 6px; }
+.pick {
+  margin-left: auto;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #9aa1aa;
+  font-size: 13px; line-height: 1;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.pick:hover { border-color: #b9bec7; color: #444; }
+.pick.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pcard.picked { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124, 92, 255, 0.12); }
+
+.mergebox {
+  border: 1px solid #dbe5fb;
+  background: #f7f9ff;
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+.mergeinfo { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.okline { color: #1a6b39; font-size: 12.5px; }
+.badline { color: #a52222; font-size: 12.5px; }
 
 .emptybox {
   border: 1px dashed var(--line); border-radius: 12px; padding: 22px;

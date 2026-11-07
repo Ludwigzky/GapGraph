@@ -30,6 +30,11 @@ function persist(packId: string, list: Question[]): Question[] {
   return list
 }
 
+/** 整批覆盖（融合板块时用：把几个板块的题合并写进新板块） */
+export function saveBank(packId: string, list: Question[]): Question[] {
+  return persist(packId, list)
+}
+
 export interface NewQuestion {
   type: 'single' | 'blank' | 'judge'
   difficulty: number

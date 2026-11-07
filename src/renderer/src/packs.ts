@@ -1,13 +1,20 @@
-import type { Pack } from '../../shared/types'
+import type { AppState, Pack, Question } from '../../shared/types'
+import { blankMastery } from '../../main/domain/queue'
 import builtin from '../../../resources/packs/gaokao-math-function.json'
+import builtinQuestions from '../../../resources/questions/gaokao-math-function.json'
+import { loadBank, saveBank } from './qbank'
 
 const CUSTOM_KEY = 'gapgraph.packs.v1'
 const ACTIVE_KEY = 'gapgraph.activepack.v1'
+const RENAME_KEY = 'gapgraph.renames.v1'
 
 export interface PackEntry {
   id: string
   title: string
   builtin: boolean
+  exam: string
+  subject: string
+  chapter: string
 }
 
 const BUILTIN = builtin as unknown as Pack
@@ -25,12 +32,105 @@ export function customPacks(): Record<string, Pack> {
   }
 }
 
+/** 内置板块的改名覆写（内置数据本身是只读的，不能改文件） */
+function renames(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(RENAME_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
 export function listPacks(): PackEntry[] {
-  const out: PackEntry[] = [{ id: BUILTIN.packId, title: BUILTIN.title, builtin: true }]
+  const rn = renames()
+  const metaOf = (p: Pack): { exam: string; subject: string; chapter: string } => ({
+    exam: p.meta?.exam ?? '',
+    subject: p.meta?.subject ?? p.subject ?? '',
+    chapter: p.meta?.chapter ?? p.title
+  })
+  const bm = metaOf(BUILTIN)
+  const out: PackEntry[] = [
+    { id: BUILTIN.packId, title: rn[BUILTIN.packId] ?? BUILTIN.title, builtin: true, ...bm }
+  ]
   for (const p of Object.values(customPacks())) {
-    out.push({ id: p.packId, title: p.title, builtin: false })
+    const m = metaOf(p)
+    out.push({
+      id: p.packId,
+      title: rn[p.packId] ?? p.title,
+      builtin: false,
+      ...m,
+      chapter: rn[p.packId] ?? m.chapter
+    })
   }
   return out
+}
+
+/** 改名：内置的存覆写，自定义的直接改数据 */
+export function renamePack(id: string, newTitle: string): void {
+  const title = newTitle.trim().slice(0, 40)
+  if (!title) return
+  if (id === BUILTIN.packId) {
+    const rn = renames()
+    rn[id] = title
+    try {
+      localStorage.setItem(RENAME_KEY, JSON.stringify(rn))
+    } catch {
+      /* 忽略 */
+    }
+    return
+  }
+  const all = customPacks()
+  const p = all[id]
+  if (!p) return
+  p.title = title
+  if (p.meta) p.meta.chapter = title
+  try {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(all))
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 取某个板块现有的全部题目（内置来自随包文件，自定义来自本地缓存） */
+export function questionsOfPack(packId: string): Question[] {
+  if (packId === BUILTIN.packId) {
+    return (builtinQuestions as unknown as { questions: Question[] }).questions
+  }
+  return loadBank(packId)
+}
+
+/** 取某个板块的学习状态（没有就返回空状态） */
+export function stateOfPack(pack: Pack): AppState {
+  try {
+    const raw = localStorage.getItem(stateKeyFor(pack.packId))
+    if (raw) return JSON.parse(raw) as AppState
+  } catch {
+    /* 落到默认 */
+  }
+  return {
+    settings: { dailyMinutes: 40, examDate: '2027-06-07', totalScore: pack.totalScore, packId: pack.packId },
+    mastery: blankMastery(pack.nodes),
+    attempts: [],
+    tasks: []
+  }
+}
+
+/** 融合结果落盘：板块、题库、学习状态三样一起写 */
+export function saveMergedPack(pack: Pack, questions: Question[], state: AppState): void {
+  const all = customPacks()
+  all[pack.packId] = pack
+  try {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(all))
+  } catch {
+    /* 忽略 */
+  }
+  saveBank(pack.packId, questions)
+  try {
+    localStorage.setItem(stateKeyFor(pack.packId), JSON.stringify({ ...state, tasks: [] }))
+  } catch {
+    /* 忽略 */
+  }
 }
 
 export function activePackId(): string {
