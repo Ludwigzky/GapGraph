@@ -126,6 +126,8 @@ export interface AskPayload {
   nodePath: string
   explain: string
   question: string
+  /** 追问某道题时附带的题目上下文（题干/选项/我的答案/正确答案/解析） */
+  context?: string
 }
 
 export interface AiCard {

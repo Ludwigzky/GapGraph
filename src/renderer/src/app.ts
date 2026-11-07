@@ -20,6 +20,17 @@ import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, in
 import { addToBank } from './qbank'
 import { addUserNode, clearPositions, loadPositions, removeUserNode, saveOnePosition } from './edits'
 import { PHYSICS_SLIDERS, loadPhysics, resetPhysics, savePhysics } from './physics'
+import {
+  LAYOUT_DEFAULT,
+  LEFT_MAX,
+  LEFT_MIN,
+  RIGHT_MAX,
+  RIGHT_MIN,
+  clampWidth,
+  loadLayout,
+  saveLayout,
+  type LayoutState
+} from './sidebar'
 import { currentPack, listPacks, packProgress, questionsOfPack, relTime, removeCustomPack, renamePack, resolvePack, saveCustomPack, saveMergedPack, setActivePackId, markStudied, stateOfPack } from './packs'
 import { canMerge, mergeSources } from '../../main/domain/merge'
 import { normalizeGeneratedPack } from '../../main/domain/pack'
@@ -862,7 +873,10 @@ function mount(): void {
       </header>
       <main>
         <aside id="today"></aside>
+        <div class="splitter" id="split-left" title="拖动调宽 / 双击复位"></div>
         <section id="stage">
+          <button class="edge-tab" id="tab-left" title="收起 / 展开今日">‹</button>
+          <button class="edge-tab" id="tab-right" title="收起 / 展开讲解">›</button>
           <svg id="graph" data-mode="structure"></svg>
           <div id="phys" class="physpanel"></div>
           <div class="legend">
@@ -878,6 +892,7 @@ function mount(): void {
           </div>
           <div id="heat"></div>
         </section>
+        <div class="splitter" id="split-right" title="拖动调宽 / 双击复位"></div>
         <aside id="panel"></aside>
       </main>
     </div>
@@ -919,6 +934,12 @@ function mount(): void {
   $('#diag').addEventListener('click', () => startDiagnostic())
   $('#add-node')?.addEventListener('click', () => addNodeInteractive())
   $('#phys-btn')?.addEventListener('click', () => renderPhysics())
+  $('#tab-left')?.addEventListener('click', () => setLayout({ ...layout, leftClosed: !layout.leftClosed }))
+  $('#tab-right')?.addEventListener('click', () => setLayout({ ...layout, rightClosed: !layout.rightClosed }))
+  attachSplitter($('#split-left') as HTMLElement | null, 'left')
+  attachSplitter($('#split-right') as HTMLElement | null, 'right')
+  applyLayout()
+  watchStageResize()
   $('#relayout')?.addEventListener('click', () => {
     clearPositions(pack.packId)
     graph.resetLayout()
@@ -1520,6 +1541,92 @@ function renderPhysics(): void {
   })
 }
 
+/* ---------------- 可拖拽侧栏 ---------------- */
+
+let layout = loadLayout()
+
+function applyLayout(): void {
+  const m = document.querySelector('main') as HTMLElement | null
+  if (!m) return
+  m.style.setProperty('--left-w', (layout.leftClosed ? 0 : layout.left) + 'px')
+  m.style.setProperty('--right-w', (layout.rightClosed ? 0 : layout.right) + 'px')
+  m.classList.toggle('left-closed', layout.leftClosed)
+  m.classList.toggle('right-closed', layout.rightClosed)
+  const tl = $('#tab-left')
+  const tr = $('#tab-right')
+  if (tl) {
+    tl.textContent = layout.leftClosed ? '›' : '‹'
+    tl.title = layout.leftClosed ? '展开今日' : '收起今日'
+  }
+  if (tr) {
+    tr.textContent = layout.rightClosed ? '‹' : '›'
+    tr.title = layout.rightClosed ? '展开讲解' : '收起讲解'
+  }
+}
+
+function setLayout(next: LayoutState): void {
+  layout = next
+  applyLayout()
+  saveLayout(layout)
+}
+
+function attachSplitter(el: HTMLElement | null, side: 'left' | 'right'): void {
+  if (!el) return
+  el.addEventListener('pointerdown', (e) => {
+    const main = document.querySelector('main') as HTMLElement | null
+    if (!main) return
+    e.preventDefault()
+    const rect = main.getBoundingClientRect()
+    try {
+      el.setPointerCapture(e.pointerId)
+    } catch {
+      /* 合成事件没有真实 pointerId，捕获失败不影响拖动 */
+    }
+    document.body.classList.add('col-resizing')
+
+    const move = (ev: PointerEvent): void => {
+      if (side === 'left') {
+        const w = clampWidth(ev.clientX - rect.left, LEFT_MIN, LEFT_MAX)
+        layout = { ...layout, left: w, leftClosed: false }
+      } else {
+        const w = clampWidth(rect.right - ev.clientX, RIGHT_MIN, RIGHT_MAX)
+        layout = { ...layout, right: w, rightClosed: false }
+      }
+      applyLayout()
+    }
+    const up = (): void => {
+      document.body.classList.remove('col-resizing')
+      el.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      saveLayout(layout)
+      graph.fit()
+    }
+    el.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  })
+  // 双击复位这一侧
+  el.addEventListener('dblclick', () => {
+    setLayout(
+      side === 'left'
+        ? { ...layout, left: LAYOUT_DEFAULT.left, leftClosed: false }
+        : { ...layout, right: LAYOUT_DEFAULT.right, rightClosed: false }
+    )
+    graph.fit()
+  })
+}
+
+/** 舞台尺寸变了要重新取景，否则图会偏到一边 */
+let resizeTimer: number | undefined
+function watchStageResize(): void {
+  const stage = $('#stage')
+  if (!stage || typeof ResizeObserver === 'undefined') return
+  const ro = new ResizeObserver(() => {
+    window.clearTimeout(resizeTimer)
+    resizeTimer = window.setTimeout(() => graph.fit(), 120)
+  })
+  ro.observe(stage)
+}
+
 /* ---------------- 右栏全屏 ---------------- */
 
 let panelExpanded = false
@@ -1619,6 +1726,88 @@ interface Session {
 
 let session: Session | null = null
 let diagResult: DiagSummary | null = null
+
+/* ---------------- 题目追问 ----------------
+ * 规则：**交卷之后**才能对这题追问，作答期间不开放。
+ * 理由很实在——没作答就问，等于让人替你想，这题就不算做过了。
+ */
+const ASK_KEY = 'gapgraph.asks.v1'
+interface AskTurn {
+  q: string
+  a: string
+}
+let askBusy = false
+let askDraft = ''
+let askError = ''
+
+function loadAsks(): Record<string, AskTurn[]> {
+  try {
+    const raw = localStorage.getItem(ASK_KEY)
+    const v = raw ? JSON.parse(raw) : {}
+    return v && typeof v === 'object' ? (v as Record<string, AskTurn[]>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function asksOf(qid: string): AskTurn[] {
+  const all = loadAsks()
+  return Array.isArray(all[qid]) ? all[qid] : []
+}
+
+function pushAsk(qid: string, turn: AskTurn): void {
+  const all = loadAsks()
+  const list = Array.isArray(all[qid]) ? all[qid] : []
+  all[qid] = [...list, turn].slice(-8)
+  try {
+    localStorage.setItem(ASK_KEY, JSON.stringify(all))
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 把这道题完整摊给 AI 看：题干、选项、我选的、正确答案、解析 */
+function questionContext(q: Question, mine: string): string {
+  const lines: string[] = []
+  const typeName = q.type === 'single' ? '单选' : q.type === 'judge' ? '判断' : '填空'
+  lines.push(`题型：${typeName}（难度 ${q.difficulty}）`)
+  lines.push(`题干：${q.stem}`)
+  if (q.options?.length) {
+    lines.push(`选项：${q.options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('  ')}`)
+  }
+  const right = Array.isArray(q.answer) ? q.answer.join(' 或 ') : q.answer
+  lines.push(`我的作答：${mine || '（空）'}`)
+  lines.push(`正确答案：${right}`)
+  if (q.solution) lines.push(`题库解析：${q.solution}`)
+  return lines.join('\n')
+}
+
+async function askAboutQuestion(q: Question): Promise<void> {
+  const text = askDraft.trim()
+  if (!text || askBusy) return
+  const n = pack.nodes.find((x) => x.id === q.tags[0]?.nodeId)
+  askBusy = true
+  askError = ''
+  askDraft = ''
+  renderModal()
+  const res = await askAi({
+    nodeName: n?.name ?? '这道题',
+    nodePath: n ? pathOf(n.id) : '',
+    explain: n?.brief ?? '',
+    question: text,
+    context: questionContext(q, session?.answer ?? '')
+  })
+  askBusy = false
+  if (!res || !res.answer) {
+    askError = 'AI 没接上。先看下面题库自带的解析，或稍后再问一次。'
+    renderModal()
+    return
+  }
+  pushAsk(q.id, { q: text, a: res.answer })
+  renderModal()
+}
+
+const ASK_PRESETS = ['这题为什么错', '为什么答案是这个', '考的是哪个考点', '换个方法再讲一遍']
 
 function startDiagnostic(): void {
   if (questions.length === 0) {
@@ -1754,6 +1943,30 @@ function renderModal(): void {
        </div>`
     : ''
 
+  // 追问只在交卷后出现：没作答就问，这题等于没做
+  const askTurns = answered ? asksOf(q.id) : []
+  const askHtml = answered
+    ? `<div class="askbox">
+         <div class="askhead"><b>对这题还有疑问？</b><span>已作答，可以追问</span></div>
+         <div class="askchips">${ASK_PRESETS.map((p) => `<button class="askchip" data-ask="${p}">${p}</button>`).join('')}</div>
+         <div class="askrow">
+           <input id="qask-input" class="askinput" placeholder="具体问一句，比如：为什么不能用判别式？"
+             value="${esc(askDraft).replace(/"/g, '&quot;')}" ${askBusy ? 'disabled' : ''} />
+           <button class="primary small" id="ask-send" ${askBusy ? 'disabled' : ''}>${askBusy ? '想问…' : '问'}</button>
+         </div>
+         ${askError ? `<div class="askerr">${esc(askError)}</div>` : ''}
+         ${
+           askTurns.length
+             ? `<div class="asklog">${askTurns
+                 .map(
+                   (t) => `<div class="askitem"><div class="askq">${esc(t.q)}</div><div class="aska">${esc(t.a)}</div></div>`
+                 )
+                 .join('')}</div>`
+             : ''
+         }
+       </div>`
+    : ''
+
   box.innerHTML = `
     <div class="sheet">
       <div class="qhead">
@@ -1765,6 +1978,7 @@ function renderModal(): void {
       ${inputHtml}
       ${reasonHtml}
       ${fb}
+      ${askHtml}
       <div class="footer-row">
         ${
           answered
@@ -1818,6 +2032,27 @@ function renderModal(): void {
     })
   }
   box.querySelector('#submit')?.addEventListener('click', () => void doSubmit())
+  box.querySelectorAll<HTMLButtonElement>('[data-ask]').forEach((b) => {
+    b.addEventListener('click', () => {
+      askDraft = b.dataset.ask as string
+      void askAboutQuestion(q)
+    })
+  })
+  const askInput = box.querySelector<HTMLInputElement>('#qask-input')
+  askInput?.addEventListener('input', () => {
+    askDraft = askInput.value
+  })
+  // 发送时直接读输入框的值：中文输入法组合期间 input 事件可能丢，
+  // 只靠 askDraft 会出现"点了没反应"。
+  const sendAsk = (): void => {
+    const el = box.querySelector<HTMLInputElement>('#qask-input')
+    if (el) askDraft = el.value
+    void askAboutQuestion(q)
+  }
+  askInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendAsk()
+  })
+  box.querySelector('#ask-send')?.addEventListener('click', sendAsk)
   box.querySelector('#later')?.addEventListener('click', () => {
     session = null
     renderModal()

@@ -57,6 +57,22 @@ function verifySystem(exam, subject) {
 }
 
 /**
+ * 答疑用的身份。之前这里直接引用了不存在的 SYSTEM 常量，
+ * 导致 /chat 每次都是 500——右栏的"直接问 AI"和题目追问其实一直是坏的。
+ */
+function qaSystem(exam, subject) {
+  const who = [exam, subject].filter(Boolean).join(' ') || '高中'
+  return `你是${who}老师，正在给学生答疑。只输出 JSON，不要任何解释文字。
+要求：
+- 直接回答问题本身，不要客套、不要泛泛而谈
+- 如果学生在问某道具体的题，就着那道题的题干和选项讲，不要换成别的例子
+- 学生答错了，先指出他的误解出在哪一步，再给正确思路
+- 讲不超过 180 字，能一句话说清就别写三句
+输出格式：{"answer":"讲解正文","cards":[{"type":"conclusion|method|pitfall|formula","front":"正面问题","back":"背面答案"}]}
+cards 最多 2 张，没必要时给空数组。`
+}
+
+/**
  * 带硬超时的上游请求。
  *
  * 为什么必须有：实测约 1/8 的请求会"连接挂住"——一个字节都不回。
@@ -400,10 +416,12 @@ const server = http.createServer(async (req, res) => {
 
   try {
     const body = await readBody(req)
-    const question = String(body.question || '').slice(0, 500)
+    const question = String(body.question || '').slice(0, 800)
     const nodeName = String(body.nodeName || '').slice(0, 60)
     const nodePath = String(body.nodePath || '').slice(0, 120)
     const explain = String(body.explain || '').slice(0, 400)
+    // 追问某道题时带来的题目上下文：题干、选项、学生答案、正确答案、解析
+    const context = String(body.context || '').slice(0, 1500)
     if (!question) {
       json(res, 400, { error: '缺少 question' })
       return
@@ -416,10 +434,10 @@ const server = http.createServer(async (req, res) => {
         temperature: 0.5,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: SYSTEM },
+          { role: 'system', content: qaSystem(body.exam, body.subject) },
           {
             role: 'user',
-            content: `考点：${nodeName}（${nodePath}）\n已有讲解：${explain}\n学生的提问：${question}`
+            content: `${context ? `【学生刚做完的一道题】\n${context}\n\n（学生已经作答并看过解析，现在是针对这道题的追问）\n\n` : ''}考点：${nodeName}（${nodePath}）\n已有讲解：${explain}\n学生的提问：${question}`
           }
         ]
       },

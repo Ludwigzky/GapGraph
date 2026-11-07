@@ -124,10 +124,87 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 button.small { padding: 3px 10px; font-size: 12px; }
 
 main {
+  --left-w: 268px;
+  --right-w: 348px;
   display: grid;
-  grid-template-columns: 268px 1fr 348px;
+  grid-template-columns: var(--left-w) 6px 1fr 6px var(--right-w);
   min-height: 0;
+  transition: grid-template-columns 0.16s ease;
 }
+body.col-resizing main { transition: none; }
+
+/* 分界线：拖动改宽度，双击复位 */
+.splitter {
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background-clip: padding-box;
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 34px;
+  border-radius: 2px;
+  background: #d8dce2;
+  transition: background 0.15s, height 0.15s;
+}
+.splitter:hover::after { background: #9aa1aa; height: 56px; }
+body.col-resizing { cursor: col-resize; user-select: none; }
+body.col-resizing .splitter::after { background: var(--ink); height: 72px; }
+
+/* 收起后分界线不占位 */
+main.left-closed #split-left,
+main.right-closed #split-right { opacity: 0; pointer-events: none; }
+
+/* 明确指定列位置：否则 display:none 会让后面的元素整体往前挪一格 */
+#today { grid-column: 1; }
+#split-left { grid-column: 2; }
+#stage { grid-column: 3; }
+#split-right { grid-column: 4; }
+#panel { grid-column: 5; }
+
+/* 收起时把 padding / 边框也清掉，否则那一条空白还是有几十像素宽 */
+main.left-closed #today,
+main.right-closed #panel {
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+
+/* 贴在舞台两侧的收起/展开小把手 */
+.edge-tab {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 7;
+  width: 16px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #9aa1aa;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+#tab-left { left: 4px; }
+#tab-right { right: 4px; }
+#stage:hover .edge-tab { opacity: 1; }
+/* 收起状态下把手必须常驻，否则用户找不到怎么展开 */
+main.left-closed #tab-left,
+main.right-closed #tab-right { opacity: 1; background: var(--ink); color: #fff; border-color: var(--ink); }
+.edge-tab:hover { color: var(--ink); border-color: #b9bec7; }
+main.left-closed #tab-left:hover,
+main.right-closed #tab-right:hover { color: #fff; }
 
 aside, section { min-height: 0; overflow: auto; }
 
@@ -686,8 +763,47 @@ input.blank {
 .footer-row { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
 .conf-toggle { display: flex; gap: 6px; }
 
-.feedback { margin-top: 16px; padding: 14px; border-radius: 12px; font-size: 13.5px; line-height: 1.8; }
-.feedback.ok { background: #f1fbf4; border: 1px solid #cdebd6; }
+/* 交卷后的追问区 */
+.askbox {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfcfd;
+}
+.askhead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.askhead b { font-size: 13.5px; }
+.askhead span { font-size: 11.5px; color: var(--muted); }
+.askchips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.askchip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  color: #3c4148;
+  cursor: pointer;
+}
+.askchip:hover { border-color: #b9bec7; color: var(--ink); }
+.askrow { display: flex; gap: 8px; }
+.askinput {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+}
+.askinput:focus { outline: 2px solid rgba(24, 24, 26, 0.12); border-color: #b9bec7; }
+.askerr { margin-top: 8px; font-size: 12.5px; color: #b4342b; }
+.asklog { margin-top: 12px; display: grid; gap: 10px; }
+.askitem { border-left: 2px solid var(--line); padding-left: 10px; }
+.askq { font-size: 12.5px; color: #6b7280; margin-bottom: 4px; }
+.aska { font-size: 13.5px; line-height: 1.85; white-space: pre-wrap; }
+
+.feedback { margin-top: 16px; padding: 14px; border-radius: 12px; font-size: 13.5px; line-height: 1.8; }.feedback.ok { background: #f1fbf4; border: 1px solid #cdebd6; }
 .feedback.bad { background: #fdf3f3; border: 1px solid #f2d2d2; }
 .feedback .delta { font-variant-numeric: tabular-nums; font-weight: 650; }
 .feedback .bandshift {
