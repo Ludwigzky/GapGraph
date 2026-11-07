@@ -200,7 +200,35 @@ aside, section { min-height: 0; overflow: auto; }
 #graph .e-pre { stroke: var(--pre); stroke-width: 1.5; stroke-dasharray: 6 5; }
 #graph .e-con { stroke: var(--con); stroke-width: 1.7; stroke-dasharray: 1.5 5; }
 
-/* 关系线默认不画：选中谁才显示和谁相关的那几条 */#graph .e-pre { display: none; }
+/* 力学面板（仿 Obsidian 右侧那个） */
+.physpanel {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 246px;
+  max-height: calc(100% - 90px);
+  overflow: auto;
+  display: none;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.09);
+  padding: 12px 14px 10px;
+  z-index: 6;
+}
+.physpanel.open { display: block; }
+.phead {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12.5px; font-weight: 650; margin-bottom: 10px;
+}
+.pclose { border: 0; background: transparent; cursor: pointer; color: #9aa1aa; font-size: 12px; }
+.pclose:hover { color: var(--ink); }
+.prow { display: block; margin-bottom: 11px; }
+.plabel { display: flex; justify-content: space-between; font-size: 12px; color: #3c4148; margin-bottom: 4px; }
+.plabel b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.prow input[type='range'] { width: 100%; accent-color: var(--accent); }
+.phint { display: block; font-size: 10.5px; color: #9aa1aa; margin-top: 2px; line-height: 1.45; }
+.pfoot { display: flex; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }#graph .e-pre { display: none; }
 #graph .e-con { display: none; }
 
 #graph .edge.ctx > .e-pre,

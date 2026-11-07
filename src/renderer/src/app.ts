@@ -19,6 +19,7 @@ import { addCard, isSaved, loadCards, removeCard } from './cards'
 import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
 import { addToBank } from './qbank'
 import { addUserNode, clearPositions, loadPositions, removeUserNode, saveOnePosition } from './edits'
+import { PHYSICS_SLIDERS, loadPhysics, resetPhysics, savePhysics } from './physics'
 import { currentPack, listPacks, packProgress, questionsOfPack, relTime, removeCustomPack, renamePack, resolvePack, saveCustomPack, saveMergedPack, setActivePackId, markStudied, stateOfPack } from './packs'
 import { canMerge, mergeSources } from '../../main/domain/merge'
 import { normalizeGeneratedPack } from '../../main/domain/pack'
@@ -845,6 +846,7 @@ function mount(): void {
         <button class="ghost small h-only" id="heat-sort">缺口优先</button>
         <button class="ghost small g-only" id="guide-btn">指南</button>
         <button class="ghost small g-only" id="fold" aria-pressed="true">折叠</button>
+        <button class="ghost small g-only" id="phys-btn">力学</button>
         <button class="ghost small g-only" id="relayout">重排</button>
         <button class="ghost small g-only" id="add-node">＋考点</button>
         <button class="ghost small" id="diag">摸底</button>
@@ -857,6 +859,7 @@ function mount(): void {
         <aside id="today"></aside>
         <section id="stage">
           <svg id="graph" data-mode="structure"></svg>
+          <div id="phys" class="physpanel"></div>
           <div class="legend">
             <span><i style="background:var(--c1)"></i>塌了</span>
             <span><i style="background:var(--c2)"></i>不稳</span>
@@ -897,6 +900,7 @@ function mount(): void {
     }
   })
   graph.setMode('structure')
+  graph.setPhysics(physics)
 
   document.querySelectorAll<HTMLButtonElement>('.modes button').forEach((b) => {
     b.addEventListener('click', () => {
@@ -909,6 +913,7 @@ function mount(): void {
   })
   $('#diag').addEventListener('click', () => startDiagnostic())
   $('#add-node')?.addEventListener('click', () => addNodeInteractive())
+  $('#phys-btn')?.addEventListener('click', () => renderPhysics())
   $('#relayout')?.addEventListener('click', () => {
     clearPositions(pack.packId)
     graph.resetLayout()
@@ -1440,6 +1445,70 @@ function refreshVisuals(): void {
   // 用户拖过的位置要钉回去，否则每次刷新又乱了
   graph.setPositions(loadPositions(pack.packId))
   if (document.body.dataset.view === 'heat') renderHeat()
+}
+
+/* ---------------- 力学面板 ---------------- */
+
+let physics = loadPhysics()
+
+function renderPhysics(): void {
+  const box = $('#phys')
+  if (!box) return
+  const open = box.classList.contains('open')
+  box.classList.toggle('open', !open)
+  if (open) {
+    box.innerHTML = ''
+    return
+  }
+  const rows = PHYSICS_SLIDERS.map((s) => {
+    const raw = Math.abs(physics[s.key])
+    const shown = s.display ? s.display(physics[s.key]) : physics[s.key]
+    return `<label class="prow">
+      <span class="plabel">${s.label}<b>${Number(shown).toFixed(s.step < 1 ? 2 : 0)}</b></span>
+      <input type="range" data-phys="${s.key}" min="${s.min}" max="${s.max}" step="${s.step}" value="${raw}" />
+      <span class="phint">${s.hint}</span>
+    </label>`
+  }).join('')
+
+  box.innerHTML = `
+    <div class="phead">
+      <span>图谱力学</span>
+      <button class="pclose" id="phys-close" title="关闭">✕</button>
+    </div>
+    ${rows}
+    <div class="pfoot">
+      <button class="ghost small" id="phys-reset">恢复默认</button>
+      <button class="ghost small" id="phys-reheat">重排一次</button>
+    </div>
+  `
+
+  box.querySelector('#phys-close')?.addEventListener('click', () => {
+    box.classList.remove('open')
+    box.innerHTML = ''
+  })
+  box.querySelector('#phys-reset')?.addEventListener('click', () => {
+    physics = resetPhysics()
+    graph.applyPhysicalBatch(physics)
+    renderPhysics()
+    renderPhysics()
+  })
+  box.querySelector('#phys-reheat')?.addEventListener('click', () => {
+    clearPositions(pack.packId)
+    graph.applyPhysicalBatch(physics)
+  })
+  box.querySelectorAll<HTMLInputElement>('[data-phys]').forEach((el) => {
+    el.addEventListener('input', () => {
+      const key = el.dataset.phys as keyof typeof physics
+      const meta = PHYSICS_SLIDERS.find((s) => s.key === key)
+      const raw = Number(el.value)
+      physics = { ...physics, [key]: meta?.parse ? meta.parse(raw) : raw }
+      savePhysics(physics)
+      const shown = meta?.display ? meta.display(physics[key]) : physics[key]
+      const label = el.parentElement?.querySelector('.plabel b')
+      if (label) label.textContent = Number(shown).toFixed(meta && meta.step < 1 ? 2 : 0)
+      graph.setPhysics({ [key]: physics[key] })
+    })
+  })
 }
 
 /* ---------------- 增删考点 ---------------- */

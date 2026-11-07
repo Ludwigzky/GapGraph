@@ -1,6 +1,7 @@
 import type { KNode, Mastery, Relation } from '../../shared/types'
 import { masteryScore } from '../../shared/mastery'
 import { forceStep, hasOverlap, separateBoxes, textWidth, type ForceEdge, type ForceNode } from '../../main/domain/layout'
+import { PHYSICS_DEFAULTS, type PhysicsParams } from './physics'
 
 export type GraphMode = 'structure' | 'gap'
 
@@ -238,29 +239,39 @@ export class KnowledgeGraph {
   }
 
   /** 力场参数：向心力 / 斥力 / 弹簧长度，和 Obsidian 关系图那几个滑杆是一回事 */
-  private params(n: number): {
-    w: number
-    h: number
-    charge: number
-    linkDistance: number
-    linkStrength: number
-    recenter: number
-    velocityDecay: number
-    maxStep: number
-    minDistance: number
-  } {
+  private params(n: number): PhysicsParams & { w: number; h: number } {
+    void n
     return {
       w: W,
       h: H,
-      charge: -150,
-      linkDistance: Math.round(Math.max(100, Math.min(190, Math.sqrt((W * H) / Math.max(1, n)) * 0.62))),
-      linkStrength: 0.54,
-      // 只对齐整体重心，不按节点拉——否则外围会被引力收回中心
-      recenter: 0.08,
-      velocityDecay: 0.45,
-      maxStep: 6,
-      minDistance: 55
+      ...this.tuning
     }
+  }
+
+  /** 用户在"力学"面板里调过的参数 */
+  private tuning: PhysicsParams = { ...PHYSICS_DEFAULTS }
+
+  /** 应用一组参数：立刻加热跑一小段，让人马上看到变化 */
+  setPhysics(next: Partial<PhysicsParams>): void {
+    this.tuning = { ...this.tuning, ...next }
+    this.alpha = Math.max(this.alpha, 0.6)
+    this.startSim()
+  }
+
+  applyPhysicalBatch(next: PhysicsParams): void {
+    this.tuning = { ...next }
+    this.alpha = 1
+    const list = this.listOfVisible()
+    const edges = this.physicsEdges(new Set(list.map((b) => b.id)))
+    const p = this.params(list.length)
+    for (let i = 0; i < 220; i++) {
+      forceStep(list, edges, { ...p, alpha: this.alpha })
+      this.alpha += (0 - this.alpha) * 0.0228
+    }
+    separateBoxes(list, 16, 30)
+    this.alpha = 0
+    this.render()
+    this.fit()
   }
 
   private layout(iterations = 340): void {

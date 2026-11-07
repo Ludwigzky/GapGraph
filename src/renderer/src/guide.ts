@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.3.3'
+export const GUIDE_VERSION = '1.4.0'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,15 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.4.0',
+    date: '2026-11-06',
+    items: [
+      '新增「力学」面板：七个滑杆实时调图谱手感——节点斥力、连线长度、连线强度、向心、阻尼、单帧限速、近距钳制。',
+      '拖动滑杆立刻生效，不用重新打开板块；调好的值会记住，下次打开还是你习惯的手感。',
+      '面板里还有「恢复默认」和「重排一次」两个按钮。'
+    ]
+  },
   {
     version: '1.3.3',
     date: '2026-11-06',
