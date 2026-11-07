@@ -28,8 +28,18 @@ describe('使用指南', () => {
   })
 
   it('更新记录按版本倒序排列', () => {
+    // 必须按数字逐段比：字符串比较会把 "1.10.0" 判成小于 "1.9.0"
+    const cmp = (a: string, b: string): number => {
+      const pa = a.split('.').map(Number)
+      const pb = b.split('.').map(Number)
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+        if (d !== 0) return d
+      }
+      return 0
+    }
     for (let i = 1; i < GUIDE_RELEASES.length; i++) {
-      expect(GUIDE_RELEASES[i - 1].version >= GUIDE_RELEASES[i].version).toBe(true)
+      expect(cmp(GUIDE_RELEASES[i - 1].version, GUIDE_RELEASES[i].version)).toBeGreaterThan(0)
     }
   })
 })

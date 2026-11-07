@@ -1,4 +1,5 @@
 import type { Question } from '../../shared/types'
+import { equivalentAnswer } from './equiv'
 
 /** 统一归一化：全角转半角、去空格、统一不等号/根号/括号/乘除写法 */
 export function normalize(raw: string): string {
@@ -47,6 +48,8 @@ export function isCorrect(question: Question, userAnswer: string): boolean {
     const a = numeric(given)
     const b = numeric(target)
     if (a !== null && b !== null && Math.abs(a - b) < 1e-9) return true
+    // 语义等效：x>1 ≡ (1,+∞)、2(x+1) ≡ 2x+2、x=1或x=2 ≡ 1,2
+    if (equivalentAnswer(String(raw), String(userAnswer))) return true
   }
   return false
 }

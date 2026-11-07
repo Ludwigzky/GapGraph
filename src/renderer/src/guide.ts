@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.9.0'
+export const GUIDE_VERSION = '1.10.0'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,19 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.10.0',
+    date: '2026-11-07',
+    items: [
+      '填空题答案现在按"意思一样"判对，不再要求一个字不差：',
+      '  · x>1 和 (1,+∞) 算对',
+      '  · 1<x<2 和 (1,2) 算对',
+      '  · 2(x+1) 和 2x+2 算对（换几个数代进去都一样就算等效）',
+      '  · x=1或x=2、{1,2}、1,2 三种写法都算对',
+      '  · 1/2 和 0.5、x² 和 x^2 算对',
+      '开闭区间不混、端点不错、系数不对——这些仍然判错，没有放宽。'
+    ]
+  },
   {
     version: '1.9.0',
     date: '2026-11-07',
