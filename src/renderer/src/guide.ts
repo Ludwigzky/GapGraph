@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.3.2'
+export const GUIDE_VERSION = '1.3.3'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,16 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.3.3',
+    date: '2026-11-06',
+    items: [
+      '可拖动范围扩大约 2.4 倍：画布从 1400×903 放大到 1944×1254，节点能拖到更远的地方摆。',
+      '修复拖动时部分节点高频震动：原来按住不动也一直保持在"高温"，力永远在推。现在只有指针真的在移动才加热，停住就冷却。',
+      '斥力加了最小距离钳制，两个节点挨太近时不再互相顶到发抖；再配合"方向反转就减速"，彻底压住了抖动。',
+      '实测：按住一个节点不动 1.5 秒，其他节点最后 30 帧的最大位移从 8.7px 降到 0.7px。'
+    ]
+  },
   {
     version: '1.3.2',
     date: '2026-11-06',

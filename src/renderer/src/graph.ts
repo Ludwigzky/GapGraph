@@ -106,6 +106,8 @@ export class KnowledgeGraph {
   private dragNode: { id: string; grabX: number; grabY: number } | null = null
   /** 拖动目标位置：指针只负责改这个，节点由模拟循环去跟，避免被事件频率带飞 */
   private dragTarget: { id: string; x: number; y: number } | null = null
+  /** 指针最后真正移动的时刻：按住不动时应当冷却，否则力一直在推 = 高频震动 */
+  private dragMovedAt = 0
   private simRaf = 0
   private simFrames = 0
   /** 温度：1 = 剧烈，接近 0 = 冷却静止。交互时重新加热（和 Obsidian 一样） */
@@ -153,8 +155,9 @@ export class KnowledgeGraph {
   }
 
   private resizeCanvas(n: number): void {
-    const area = Math.max(1, n) * 9000
-    W = Math.round(Math.max(880, Math.sqrt(area * 1.55)))
+    // 画布给得比节点需要的宽裕得多：用户要能把节点拖到很远的地方慢慢摆。
+    // 注意 fit() 按"节点包围盒"算缩放，所以画布变大不会让字变小，只是可活动区域变大。
+    W = Math.round(Math.max(1800, Math.min(3600, Math.sqrt(Math.max(1, n)) * 300)))
     H = Math.round(W / 1.55)
   }
 
@@ -244,6 +247,7 @@ export class KnowledgeGraph {
     recenter: number
     velocityDecay: number
     maxStep: number
+    minDistance: number
   } {
     return {
       w: W,
@@ -254,7 +258,8 @@ export class KnowledgeGraph {
       // 只对齐整体重心，不按节点拉——否则外围会被引力收回中心
       recenter: 0.08,
       velocityDecay: 0.45,
-      maxStep: 6
+      maxStep: 6,
+      minDistance: 55
     }
   }
 
@@ -365,7 +370,9 @@ export class KnowledgeGraph {
       const dotX = Math.max(b.r, Math.min(W - b.r, p.x - this.dragNode.grabX))
       const dotY = Math.max(b.h / 2, Math.min(H - b.h / 2, p.y - this.dragNode.grabY))
       // 只记目标，不直接落位：模拟循环按固定节奏去跟，手感才稳
+      const prev = this.dragTarget
       this.dragTarget = { id: this.dragNode.id, x: dotX, y: dotY }
+      if (!prev || Math.hypot(prev.x - dotX, prev.y - dotY) > 1) this.dragMovedAt = performance.now()
       this.startSim()
       return
     }
@@ -446,8 +453,10 @@ export class KnowledgeGraph {
       }
     }
 
-    // 拖动时保持"热"，松手后按 d3 的节奏冷却
-    if (this.dragTarget) this.alpha = Math.max(this.alpha, 0.5)
+    // 关键：只有指针**真的在移动**时才加热。
+    // 按住不动还保持高温，力会一直在推、分离器一直在顶，就表现为高频抖动。
+    const pointerMoving = !!this.dragTarget && performance.now() - this.dragMovedAt < 120
+    if (pointerMoving) this.alpha = Math.max(this.alpha, 0.35)
     else this.alpha += (0 - this.alpha) * 0.0228
 
     const ids = new Set(list.map((b) => b.id))
@@ -458,7 +467,7 @@ export class KnowledgeGraph {
     // 分离只推一部分：拖动时软推（像磁铁），松手后加力收敛
     const settling = !this.dragTarget
     const pinned = list.filter((b) => b.pinned).map((b) => ({ b, x: b.x, y: b.y }))
-    separateBoxes(list, 12, settling ? 3 : 2, { w: W, h: H }, settling ? 0.8 : 0.35)
+    separateBoxes(list, 12, settling ? 3 : 1, { w: W, h: H }, settling ? 0.8 : 0.3)
     for (const pin of pinned) {
       pin.b.x = pin.x
       pin.b.y = pin.y
@@ -466,11 +475,11 @@ export class KnowledgeGraph {
 
     this.syncAll()
 
-    const overlapping = hasOverlap(list, 8)
-    // 还有重叠就重新加热一点，别让低温把重叠"冻"在那儿
-    if (overlapping && !this.dragTarget) this.alpha = Math.max(this.alpha, 0.12)
-
-    const busy = this.alpha > 0.006 || overlapping || !!this.dragTarget
+    // 注意：这里不再"一检测到重叠就重新加热"。
+    // 之前那样做，只要有一对箱子轻微重叠，温度就永远降不下来，
+    // 力一直在推、分离器一直在顶，视觉上就是高频抖动。
+    const overlapping = hasOverlap(list, 6)
+    const busy = this.alpha > 0.006 || overlapping || pointerMoving
     if (!busy) return false
     if (this.simFrames++ > 900) {
       this.simFrames = 0

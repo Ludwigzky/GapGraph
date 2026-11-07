@@ -183,6 +183,9 @@ export interface ForceNode extends Box {
   pinned?: boolean
   /** 软锚：用户拖过的位置，用弱弹簧往回拉，但仍然会被邻居挤动 */
   anchor?: { x: number; y: number }
+  /** 上一帧的位移，用来识别"来回震" */
+  pdx?: number
+  pdy?: number
   vx: number
   vy: number
 }
@@ -224,6 +227,11 @@ export interface ForceOpts {
    * 关键是"弱"——强到能让它留在原地，弱到邻居还能把它挤开一点。
    */
   anchorStrength?: number
+  /**
+   * 斥力的最小距离钳制。两节点挨得很近时 1/d² 会爆掉，
+   * 和分离器互相顶，表现为高频震动。钳住之后近距离不再加码，交给分离器处理。
+   */
+  minDistance?: number
   /** 速度衰减 0..1，越大越"黏" */
   velocityDecay?: number
   /** 单帧位移上限，防止瞬移 */
@@ -275,11 +283,32 @@ export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpt
         d2 = dx * dx + dy * dy
       }
       // d3: w = charge * alpha / d²，位移 = d 向量 × w，等效强度 ∝ 1/d
-      const k = (charge * alpha) / d2
+      // 但距离太近时 1/d² 会爆，和分离器对着干 -> 震动，所以钳一个下限
+      const minD = opts.minDistance ?? 50
+      const dd = Math.max(d2, minD * minD)
+      const k = (charge * alpha) / dd
       a.vx += dx * k
       a.vy += dy * k
       b.vx -= dx * k
       b.vy -= dy * k
+
+      // 力被钳住之后，贴得太近的两个点靠力是分不开的（1/d² 被压平了），
+      // 所以近距离额外做一次小幅位置分离——不产生速度，就不会来回震。
+      // 注意：dx = b − a，所以 a 要往 −dx 方向让、b 往 +dx 方向让。
+      if (d2 < minD * minD) {
+        const d = Math.sqrt(d2) || 1
+        const push = (minD - d) * 0.06 * alpha
+        const ux = dx / d
+        const uy = dy / d
+        if (!a.pinned) {
+          a.x -= ux * push
+          a.y -= uy * push
+        }
+        if (!b.pinned) {
+          b.x += ux * push
+          b.y += uy * push
+        }
+      }
     }
   }
 
@@ -336,8 +365,19 @@ export function forceStep(nodes: ForceNode[], edges: ForceEdge[], opts: ForceOpt
     }
     nd.vx *= 1 - velocityDecay
     nd.vy *= 1 - velocityDecay
-    nd.x += Math.max(-maxStep, Math.min(maxStep, nd.vx))
-    nd.y += Math.max(-maxStep, Math.min(maxStep, nd.vy))
+    // 反抖：如果这一帧要往"上一帧的反方向"走，说明在来回震，砍掉一半速度
+    if (nd.pdx !== undefined && nd.pdy !== undefined && (nd.pdx !== 0 || nd.pdy !== 0)) {
+      if (nd.vx * nd.pdx + nd.vy * nd.pdy < 0) {
+        nd.vx *= 0.5
+        nd.vy *= 0.5
+      }
+    }
+    const stepX = Math.max(-maxStep, Math.min(maxStep, nd.vx))
+    const stepY = Math.max(-maxStep, Math.min(maxStep, nd.vy))
+    nd.pdx = stepX
+    nd.pdy = stepY
+    nd.x += stepX
+    nd.y += stepY
     nd.x = Math.max(nd.w / 2, Math.min(w - nd.w / 2, nd.x))
     nd.y = Math.max(nd.h / 2, Math.min(h - nd.h / 2, nd.y))
   }
