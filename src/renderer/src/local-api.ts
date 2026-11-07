@@ -11,9 +11,12 @@ import { blankMastery, buildToday, coverage, daysUntil } from '../../main/domain
 import { isCorrect } from '../../main/domain/grading'
 import { builtinPack, currentPack, stateKeyFor } from './packs'
 import { loadBank } from './qbank'
+import { applyEdits, loadEdits } from './edits'
 
 /** 当前生效的考纲：由引导流程选定，换了章节就换这一份；状态按 packId 隔离 */
-const PACK: Pack = currentPack() ?? builtinPack()
+const RAW_PACK: Pack = currentPack() ?? builtinPack()
+/** 用户增删过的考点在这里套上去 */
+const PACK: Pack = applyEdits(RAW_PACK, loadEdits(RAW_PACK.packId))
 const BUILTIN_ID = (packJson as unknown as Pack).packId
 /** 内置题库 + 按需生成后缓存下来的题 */
 const QUESTIONS: Question[] = [

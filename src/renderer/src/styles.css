@@ -170,11 +170,35 @@ aside, section { min-height: 0; overflow: auto; }
 
 #graph { display: block; width: 100%; height: 100%; }
 #graph text { text-anchor: middle; dominant-baseline: middle; pointer-events: none; user-select: none; }
-#graph .node text { fill: #1f2328; }
-#graph .node.dead text { fill: #565b62; }
-#graph .node { cursor: pointer; transition: opacity 0.15s; }
-#graph .node.dim { opacity: 0.35; }
+#graph .node { cursor: grab; transition: opacity 0.15s; }
+#graph .node.dragging { cursor: grabbing; }
+#graph .node rect { stroke: rgba(0, 0, 0, 0.08); stroke-width: 1; }
+#graph .node.root rect { stroke: rgba(0, 0, 0, 0.2); }
+#graph .node.dim { opacity: 0.3; }
+#graph .edge line { stroke-linecap: round; }
 #graph .ring { fill: none; stroke: #dfe3e6; stroke-width: 1; stroke-dasharray: 3 6; }
+
+#graph .e-tree { stroke: var(--tree); stroke-width: 1.6; }
+#graph .e-pre { stroke: var(--pre); stroke-width: 1.5; stroke-dasharray: 6 5; }
+#graph .e-con { stroke: var(--con); stroke-width: 1.7; stroke-dasharray: 1.5 5; }
+
+/* 关系线默认不画：选中谁才显示和谁相关的那几条 */
+#graph .e-pre { display: none; }
+#graph .e-con { display: none; }
+
+#graph .edge.ctx > .e-pre,
+#graph .edge.ctx > .e-con { display: inline !important; }
+#graph .edge.ctx > .e-tree { opacity: 0.25; }
+#graph .edge.dim { opacity: 0.1; }
+#graph .edge.dim.ctx { opacity: 1; }
+
+/* 面板里的删除按钮 */
+.node-name { display: flex; align-items: center; gap: 8px; }
+.node-del {
+  border: 0; background: transparent; color: #b9bec7; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 3px 5px; border-radius: 6px;
+}
+.node-del:hover { background: #fdecec; color: #c0392b; }
 /* 圆环标签：白描边当底，压在虚线环上也看得清；pointer-events:none 不影响点节点 */
 #graph .ringlab {
   font-size: 10px;

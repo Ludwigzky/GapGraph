@@ -1,7 +1,7 @@
 import './styles.css'
 import type { AppState, ErrorReason, KNode, LoadResult, Mastery, Question, SubmitResult, Task } from '../../shared/types'
-import { band, effective, masteryScore } from '../../shared/mastery'
-import { RadialGraph, type GraphMode } from './graph'
+import { band, effective, freshMastery, masteryScore } from '../../shared/mastery'
+import { KnowledgeGraph, type GraphMode } from './graph'
 import { createLocalApi } from './local-api'
 import {
   applyDiagAnswer,
@@ -18,6 +18,7 @@ import aiJson from '../../../resources/ai/gaokao-math-function.json'
 import { addCard, isSaved, loadCards, removeCard } from './cards'
 import { askAi, endpointStatus, generatePack, generateQuestions, getEndpoint, initEndpoint, setEndpoint, type AiAnswer } from './ai'
 import { addToBank } from './qbank'
+import { addUserNode, loadPositions, removeUserNode, saveOnePosition } from './edits'
 import { currentPack, listPacks, packProgress, questionsOfPack, relTime, removeCustomPack, renamePack, resolvePack, saveCustomPack, saveMergedPack, setActivePackId, markStudied, stateOfPack } from './packs'
 import { canMerge, mergeSources } from '../../main/domain/merge'
 import { normalizeGeneratedPack } from '../../main/domain/pack'
@@ -132,7 +133,7 @@ let state: AppState
 let today: Task[] = []
 let overview: Overview
 let selectedId: string | null = null
-let graph: RadialGraph
+let graph: KnowledgeGraph
 let mode: GraphMode = 'structure'
 
 const $ = <T extends Element = HTMLElement>(sel: string): T => document.querySelector(sel) as T
@@ -844,6 +845,7 @@ function mount(): void {
         <button class="ghost small h-only" id="heat-sort">缺口优先</button>
         <button class="ghost small g-only" id="guide-btn">指南</button>
         <button class="ghost small g-only" id="fold" aria-pressed="true">折叠</button>
+        <button class="ghost small g-only" id="add-node">＋考点</button>
         <button class="ghost small" id="diag">摸底</button>
         <button class="ghost small" id="cards-btn">卡片 0</button>
         <button class="ghost small" id="chapter-btn">章节</button>
@@ -860,9 +862,10 @@ function mount(): void {
             <span><i style="background:var(--c3)"></i>勉强</span>
             <span><i style="background:var(--c5)"></i>稳</span>
             <span><i style="background:var(--c0)"></i>没测过</span>
-            <span><span class="line"></span>层级</span>
+            <span><span class="line"></span>结构（谁是谁的下一层）</span>
             <span><span class="line pre"></span>前置（要先会）</span>
             <span><span class="line con"></span>易混（点节点看）</span>
+            <span class="hint">节点可拖动摆位置</span>
           </div>
           <div id="heat"></div>
         </section>
@@ -885,7 +888,13 @@ function mount(): void {
     location.reload()
   })
 
-  graph = new RadialGraph($('#graph') as unknown as SVGSVGElement, (id) => selectNode(id))
+  graph = new KnowledgeGraph($('#graph') as unknown as SVGSVGElement, {
+    onSelect: (id) => selectNode(id),
+    // 拖完立刻记下来，下次打开还在原地
+    onMoveNode: (id, x, y) => {
+      saveOnePosition(pack.packId, id, x, y)
+    }
+  })
   graph.setMode('structure')
 
   document.querySelectorAll<HTMLButtonElement>('.modes button').forEach((b) => {
@@ -898,6 +907,7 @@ function mount(): void {
     })
   })
   $('#diag').addEventListener('click', () => startDiagnostic())
+  $('#add-node')?.addEventListener('click', () => addNodeInteractive())
 
   document.querySelectorAll<HTMLButtonElement>('.views button').forEach((b) => {
     b.addEventListener('click', () => setView(b.dataset.view as 'graph' | 'heat'))
@@ -1092,7 +1102,11 @@ function renderPanel(): void {
   const canGen = aiReady.reachable && aiReady.supportsQuestions
 
   box.innerHTML = `
-    <h2 class="node-name">${esc(n.name)}</h2>
+    <h2 class="node-name">${esc(n.name)}${
+      n.kind === 'root'
+        ? ''
+        : `<button class="node-del" id="del-node" title="删除这个考点">✕</button>`
+    }</h2>
     <div class="node-path">${esc(pathOf(n.id))}</div>
     <div class="score-row">
       <div class="score-big ${touched ? '' : 'na'}">${touched ? eff.M.toFixed(2) : '未测'}</div>
@@ -1245,6 +1259,7 @@ function renderPanel(): void {
   box.querySelectorAll<HTMLElement>('[data-goto]').forEach((c) => {
     c.addEventListener('click', () => selectNode(c.dataset.goto as string))
   })
+  box.querySelector('#del-node')?.addEventListener('click', () => deleteNodeInteractive(n.id))
   box.querySelectorAll<HTMLButtonElement>('[data-star]').forEach((b) => {
     b.addEventListener('click', (ev) => {
       ev.stopPropagation()
@@ -1417,11 +1432,72 @@ function bandColor(m: number): string {
 
 function refreshVisuals(): void {
   graph.setData(pack.nodes, state.mastery, Date.now(), pack.relations ?? [])
+  // 用户拖过的位置要钉回去，否则每次刷新又乱了
+  graph.setPositions(loadPositions(pack.packId))
   if (document.body.dataset.view === 'heat') renderHeat()
 }
 
-function setView(view: 'graph' | 'heat'): void {
-  document.body.dataset.view = view
+/* ---------------- 增删考点 ---------------- */
+
+/** 选中了节点就加在它下面，没选就挂在根上 */
+function addNodeInteractive(): void {
+  const root = pack.nodes.find((n) => n.kind === 'root') ?? pack.nodes[0]
+  const parentId = selectedId ?? root?.id ?? null
+  const parentName = parentId ? (nodeById(parentId)?.name ?? '') : ''
+  const name = prompt(
+    parentName ? `在「${parentName}」下面加一个考点，名字是：` : '新增一个考点，名字是：',
+    ''
+  )
+  if (!name || !name.trim()) return
+  const node: KNode = {
+    id: `u_${Date.now().toString(36)}`,
+    name: name.trim().slice(0, 24),
+    parentId: parentId ?? null,
+    kind: 'concept',
+    examWeight: 0.5,
+    prereq: [],
+    confusable: [],
+    brief: ''
+  }
+  addUserNode(pack.packId, node)
+  pack.nodes.push(node)
+  state.mastery[node.id] = freshMastery(0)
+  refreshVisuals()
+  renderPanel()
+  renderToday()
+  selectNode(node.id)
+}
+
+function deleteNodeInteractive(id: string): void {
+  const n = nodeById(id)
+  if (!n) return
+  if (n.kind === 'root') {
+    alert('根节点不能删。可以给板块改名，或者删掉整个板块。')
+    return
+  }
+  const kids = pack.nodes.filter((x) => x.parentId === id)
+  const msg = kids.length
+    ? `删除「${n.name}」？它下面的 ${kids.length} 个考点会上移到上一层，不会被一起删掉。`
+    : `删除「${n.name}」？`
+  if (!confirm(msg)) return
+
+  removeUserNode(pack.packId, id)
+  const rest = pack.nodes.filter((x) => x.id !== id)
+  const parentId = n.parentId
+  for (const x of rest) {
+    if (x.parentId === id) x.parentId = parentId
+    x.prereq = x.prereq.filter((p) => p !== id)
+    x.confusable = x.confusable.filter((p) => p !== id)
+  }
+  pack.nodes = rest
+  if (pack.relations) pack.relations = pack.relations.filter((r) => r.a !== id && r.b !== id)
+  delete state.mastery[id]
+  refreshVisuals()
+  selectNode(parentId)
+  renderToday()
+}
+
+function setView(view: 'graph' | 'heat'): void {  document.body.dataset.view = view
   document.querySelectorAll<HTMLButtonElement>('.views button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.view === view))
   })
