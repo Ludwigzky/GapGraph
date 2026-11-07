@@ -8,7 +8,7 @@
  * 用户下次打开时会因为版本变化重新看到指南。
  */
 
-export const GUIDE_VERSION = '1.4.0'
+export const GUIDE_VERSION = '1.4.1'
 
 export interface GuideStep {
   title: string
@@ -106,6 +106,17 @@ export const GUIDE_RULES: string[] = [
 ]
 
 export const GUIDE_RELEASES: GuideRelease[] = [
+  {
+    version: '1.4.1',
+    date: '2026-11-06',
+    items: [
+      '修复点击节点选不中的问题：换成自由布局时漏了点击事件，只有点空白能取消，选不中自然也就看不到前置和易混。',
+      '前置 / 易混箭头改成弧线：直线会横穿整张图，弧线既避开别的节点，两种关系也各弯一边、不会叠在一起。',
+      '箭头不再被圆点盖住：线停在节点边缘外，箭头露在外面看得见。',
+      '关系边上那句「为什么」重新显示（例如「奇偶性只是对称的特例」），只在选中相关节点时出现，太长的截断。',
+      '节点名字加了白色描边，关系线从字底下穿过时照样清楚。'
+    ]
+  },
   {
     version: '1.4.0',
     date: '2026-11-06',

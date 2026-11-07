@@ -115,7 +115,7 @@ export class KnowledgeGraph {
   private alpha = 1
   private panFrom: { x: number; y: number; tx: number; ty: number } | null = null
   private downAt: { x: number; y: number } | null = null
-  private edgeEls: { spec: EdgeSpec; line: SVGLineElement }[] = []
+  private edgeEls: { spec: EdgeSpec; path: SVGPathElement; label?: SVGTextElement }[] = []
 
   constructor(svg: SVGSVGElement, handlers: GraphHandlers) {
     this.svg = svg
@@ -394,6 +394,7 @@ export class KnowledgeGraph {
   }
 
   private onUp = (e: PointerEvent): void => {
+    const moved = this.downAt ? Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) : 0
     if (this.dragNode) {
       const b = this.boxes.get(this.dragNode.id)
       const id = this.dragNode.id
@@ -405,9 +406,10 @@ export class KnowledgeGraph {
         b.pinned = false
         b.anchor = { x: b.x - b.dx, y: b.y }
         this.handlers.onMoveNode?.(id, Math.round(b.x - b.dx), Math.round(b.y))
-        // 松手后继续跑模拟，让它自己"软"下来，而不是啪一下停住
         this.startSim()
       }
+      // 按下去又松开、几乎没移动 = 点选（不是拖），选中它才看得到前置/易混
+      if (moved < 4) this.handlers.onSelect(id)
       this.panFrom = null
       this.downAt = null
       return
@@ -579,6 +581,39 @@ export class KnowledgeGraph {
     return { x: b.x - b.dx, y: b.y }
   }
 
+  /**
+   * 边的几何：
+   *  - 起点从圆点边缘出发、终点停在圆点边缘外，箭头才不会被节点盖住
+   *  - 前置/易混用弧线：直线会横穿整张图，弧线既避开别的节点，也能和结构线区分开
+   */
+  private edgeGeometry(a: NodeBox, b: NodeBox, kind: EdgeSpec['kind']): { d: string; mid: { x: number; y: number } } {
+    const pa = this.dotPos(a)
+    const pb = this.dotPos(b)
+    const dx = pb.x - pa.x
+    const dy = pb.y - pa.y
+    const len = Math.hypot(dx, dy) || 1
+    const ux = dx / len
+    const uy = dy / len
+    // 起点留出 a 的半径，终点留出 b 的半径 + 箭头长度
+    const padA = a.r + 2
+    const padB = b.r + (kind === 'pre' ? 9 : 3)
+    const x1 = pa.x + ux * Math.min(padA, len / 2)
+    const y1 = pa.y + uy * Math.min(padA, len / 2)
+    const x2 = pb.x - ux * Math.min(padB, len / 2)
+    const y2 = pb.y - uy * Math.min(padB, len / 2)
+
+    // 前置往一侧弯，易混往另一侧弯，两条同时出现也不会叠在一起
+    const bow = kind === 'pre' ? 0.18 : kind === 'con' ? -0.18 : 0
+    const cx = (x1 + x2) / 2 + -uy * len * bow
+    const cy = (y1 + y2) / 2 + ux * len * bow
+    // 标签沿曲线中点再往弯的外侧推一点，避免压在线上或压到别的节点
+    const nx = -uy * Math.sign(bow || 1)
+    const ny = ux * Math.sign(bow || 1)
+    const mid = { x: (x1 + 2 * cx + x2) / 4 + nx * 14, y: (y1 + 2 * cy + y2) / 4 + ny * 14 }
+    const d = bow === 0 ? `M${x1},${y1} L${x2},${y2}` : `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`
+    return { d, mid }
+  }
+
   render(): void {
     this.gEdge.innerHTML = ''
     this.gNode.innerHTML = ''
@@ -592,14 +627,20 @@ export class KnowledgeGraph {
       const a = this.boxes.get(spec.a)
       const b = this.boxes.get(spec.b)
       if (!a || !b) continue
-      const pa = this.dotPos(a)
-      const pb = this.dotPos(b)
+      const geo = this.edgeGeometry(a, b, spec.kind)
       const g = el('g', { class: 'edge', 'data-a': spec.a, 'data-b': spec.b })
-      const line = el('line', { class: `e-${spec.kind}`, x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y })
-      if (spec.kind === 'pre') line.setAttribute('marker-end', 'url(#arw)')
-      g.append(line)
+      const path = el('path', { class: `e-${spec.kind}`, d: geo.d })
+      if (spec.kind === 'pre') path.setAttribute('marker-end', 'url(#arw)')
+      g.append(path)
+      // 关系边的"为什么"：只有选中相关节点时才显示，否则满屏字。
+      // 太长会互相压，截到 14 个字，完整意思在右栏。
+      if (spec.why && spec.kind !== 'tree') {
+        const t = el('text', { class: 'elab', x: geo.mid.x, y: geo.mid.y })
+        t.textContent = spec.why.length > 14 ? spec.why.slice(0, 14) + '…' : spec.why
+        g.append(t)
+      }
       this.gEdge.append(g)
-      this.edgeEls.push({ spec, line })
+      this.edgeEls.push({ spec, path, label: spec.why && spec.kind !== 'tree' ? (g.querySelector('.elab') as SVGTextElement) : undefined })
     }
 
     for (const n of vis) {
@@ -640,16 +681,16 @@ export class KnowledgeGraph {
       const p = this.dotPos(b)
       g.setAttribute('transform', `translate(${p.x},${p.y})`)
     }
-    for (const { spec, line } of this.edgeEls) {
+    for (const { spec, path, label } of this.edgeEls) {
       const a = this.boxes.get(spec.a)
       const c = this.boxes.get(spec.b)
       if (!a || !c) continue
-      const pa = this.dotPos(a)
-      const pc = this.dotPos(c)
-      line.setAttribute('x1', String(pa.x))
-      line.setAttribute('y1', String(pa.y))
-      line.setAttribute('x2', String(pc.x))
-      line.setAttribute('y2', String(pc.y))
+      const geo = this.edgeGeometry(a, c, spec.kind)
+      path.setAttribute('d', geo.d)
+      if (label) {
+        label.setAttribute('x', String(geo.mid.x))
+        label.setAttribute('y', String(geo.mid.y))
+      }
     }
   }
 

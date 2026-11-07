@@ -194,11 +194,15 @@ aside, section { min-height: 0; overflow: auto; }
 /* 未测节点：灰要灰得看得见，不然"不知道"和"不存在"分不清 */
 #graph .node.unmeasured .dot { fill: #b3b9c0; }
 
-#graph .edge line { stroke-linecap: round; }
+#graph .edge path { fill: none; stroke-linecap: round; }
 
-#graph .e-tree { stroke: var(--tree); stroke-width: 1.4; }
-#graph .e-pre { stroke: var(--pre); stroke-width: 1.5; stroke-dasharray: 6 5; }
-#graph .e-con { stroke: var(--con); stroke-width: 1.7; stroke-dasharray: 1.5 5; }
+/* 标签描白边：关系线从字底下穿过时，字照样清楚 */
+#graph .node text {
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+}
 
 /* 力学面板（仿 Obsidian 右侧那个） */
 .physpanel {
