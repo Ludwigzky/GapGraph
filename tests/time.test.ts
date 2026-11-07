@@ -83,11 +83,14 @@ describe('时间流逝：到期复习', () => {
     expect(tasks.some((t) => t.kind === 'review')).toBe(true)
   })
 
-  it('久不复习，掌握分会按遗忘曲线掉下来', () => {
+  it('久不复习：能力分不贬损，但复习紧迫度显著上升', () => {
+    // v2：时间流逝影响的是"该复习了"，不是"变笨了"。
+    // 以前 M = K·A·(0.6+0.4R) 会让分数随遗忘曲线掉，等于把没复习当成能力下降。
     const m = practice(3, T0)
     const fresh = masteryScore(m, T0 + 1000)
     const stale = masteryScore(m, T0 + 30 * DAY)
-    expect(stale).toBeLessThan(fresh * 0.75)
+    expect(stale).toBeCloseTo(fresh, 10) // 能力不变
+    expect(isDue(m, T0 + 30 * DAY)).toBe(true) // 但会被排进复习
   })
 
   it('连续几天不碰，进度不会自己涨回去', () => {

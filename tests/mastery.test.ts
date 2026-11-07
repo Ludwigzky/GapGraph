@@ -73,11 +73,15 @@ describe('掌握度模型', () => {
     expect(isDue(stale, T0)).toBe(true)
   })
 
-  it('数据少时向 0.3 先验收缩，避免排错任务', () => {
+  it('证据少时只降低"可信度"，不把能力往默认值收缩', () => {
+    // v2：以前 effective() 用 conf*M+(1−conf)*0.3 把证据少的节点拉向 0.3，
+    // 再拿这个捏造的值去排缺口 —— 等于把"没测过"当成"大概三成会"。
+    // 现在 eff 就是能力本身，未知由 known=false 单独表达。
     const few = { ...freshMastery(1), A: 0.9, n: 1, lastAt: T0 }
-    const eff = effective(few, T0)
-    expect(eff.conf).toBeLessThan(0.3)
-    expect(eff.eff).toBeLessThan(eff.M)
+    const e = effective(few, T0)
+    expect(e.conf).toBeLessThan(0.5)
+    expect(e.known).toBe(true)
+    expect(e.eff).toBeCloseTo(e.M, 10) // 不再收缩
   })
 
   it('自评"学过不会"的考点，连续做对能真的走到绿色（不能被 K 封顶）', () => {

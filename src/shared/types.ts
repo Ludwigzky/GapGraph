@@ -72,31 +72,60 @@ export interface Question {
   tags: Tag[]
 }
 
+/**
+ * 用户自评：主观报告，**不是**能力估计。
+ * - none    没学过
+ * - weak    学过但不会
+ * - basic   基本掌握
+ * - unknown 没表态 / 由旧数据迁移而来（旧 K 混合了自评和答题自动更新，无法分离）
+ */
+export type SelfLevel = 'none' | 'weak' | 'basic' | 'unknown'
+
+/**
+ * 个人知识状态（v2）。
+ *
+ * 四个概念分开存，不再混在一根乘法里：
+ *   ① 自评 SelfLevel   —— 用户主观报告，只影响展示与初始建议，不参与能力计算
+ *   ② 能力 Ability     —— A / W / Aw，只由**有效答题证据**更新
+ *   ③ 记忆保持 Retention —— s / lastAt 推导，只用于决定什么时候该复习
+ *   ④ 可信度 Confidence  —— 由 W（衰减后的有效样本量）推导，独立于能力高低
+ *
+ * 老字段 K 保留为历史值：v1 里它既被自评改、又被答对自动抬，
+ * 已经分不出哪部分来自用户、哪部分来自答题，所以不再参与任何计算。
+ */
 export interface Mastery {
-  /** 覆盖：0 没学过 / 0.5 学过不会 / 1 会 */
+  /** 历史覆盖度。v2 起不参与计算，仅保留旧数据 */
   K: number
-  /** 能力：难度加权、时间衰减后的正确率估计（A = Aw / W） */
+  /** 能力估计（证据驱动，A = Aw / W） */
   A: number
   /** 稳定性（天），用于遗忘曲线 */
   s: number
-  /** 累计作答（仅计入"有效证据"的次数） */
+  /** 累计有效作答次数（疑似蒙对不计） */
   n: number
   nok: number
-  /** 时间衰减后的权重和 = 有效样本量，用于置信度 */
+  /** 时间衰减后的权重和 = 有效样本量，用来算可信度 */
   W: number
-  /** 时间衰减后的加权正确和，A = Aw / W */
+  /** 时间衰减后的加权正确和 */
   Aw: number
   /** 错误概念已固化 */
   misconception: 0 | 1
   lastAt: number | null
   /**
    * 这个状态是怎么来的：
-   * - none  什么信息都没有（没自评、没答题）
-   * - self  只有用户自评，还没做过一道题 —— 不能当成诊断结论
+   * - none  什么信息都没有
+   * - self  只有用户自评，还没做过一道题
    * - tested 至少有过一次有效作答
-   * 老存档没有这个字段，按 n/K 推断（见 evidenceOf）。
+   * 读取时以 n/K 推导为准（见 evidenceOf），字段只作记录。
    */
   evidence?: 'none' | 'self' | 'tested'
+  /** 数据结构版本：2 = 自评/能力/保持/可信度已拆分 */
+  schemaVersion?: number
+  /** 用户自评档位（主观，不是能力） */
+  selfLevel?: SelfLevel
+  /** 自评时间 */
+  selfAt?: number | null
+  /** 能力估计的来源：v1 是旧模型算的（迁移而来），v2 是拆分后的证据模型 */
+  abilityFrom?: 'v1' | 'v2'
 }
 
 export type SelfConfidence = 'sure' | 'unsure' | 'unknown'
@@ -104,7 +133,7 @@ export type SelfConfidence = 'sure' | 'unsure' | 'unknown'
 export type ErrorReason =
   | 'calc' | 'formula' | 'misread' | 'concept' | 'method' | 'guess' | null
 
-export type TaskKind = 'review' | 'gap' | 'new'
+export type TaskKind = 'review' | 'gap' | 'diagnose' | 'new'
 
 export interface Task {
   id: string
@@ -153,6 +182,8 @@ export interface Settings {
 }
 
 export interface AppState {
+  /** 数据结构版本。2 = 掌握状态已拆成自评/能力/保持/可信度 */
+  schemaVersion?: number
   settings: Settings
   mastery: Record<string, Mastery>
   attempts: AttemptRecord[]

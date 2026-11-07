@@ -14,6 +14,8 @@ export interface BuildQueueArgs {
 
 const REVIEW_MINUTES = 8
 const GAP_MINUTES = 13
+/** 诊断卡比补救卡轻一点：只是摸底，不该占满预算 */
+const DIAGNOSE_MINUTES = 10
 const MAX_CARDS = 3
 
 /**
@@ -48,20 +50,28 @@ export function buildToday(args: BuildQueueArgs): Task[] {
     used.add(item.n.id)
   }
 
-  /* 2) 缺口补救：优先级最高的那个（跳过已排的） */
+  /* 2) 缺口补救 / 待诊断：优先级最高的那个（跳过已排的）
+   *
+   * 这里区分两种卡：
+   *   known=false → 'diagnose'：还没测过，先摸个底，不预设"你不会"
+   *   known=true  → 'gap'     ：测出来确实是洞，做补救
+   * 任务书 B8：未知节点应该优先"是否需要诊断"，而不是直接当成不会。
+   */
   const ranked = rankGaps(nodes, mastery, { now, rush: daysLeft <= 30 })
   for (const g of ranked) {
     if (used.has(g.node.id)) continue
     if (g.node.kind === 'root') continue
+    if (g.reason === 'solid') continue
     const qs = questionsForNode(g.node.id, questions).slice(0, 3)
     if (qs.length === 0) continue
+    const diagnose = g.reason === 'diagnose'
     tasks.push({
-      id: `${date}-gap-${g.node.id}`,
+      id: `${date}-${diagnose ? 'diag1' : 'gap'}-${g.node.id}`,
       date,
-      kind: 'gap',
+      kind: diagnose ? 'diagnose' : 'gap',
       nodeId: g.node.id,
       questionIds: qs.map((q) => q.id),
-      estMinutes: GAP_MINUTES,
+      estMinutes: diagnose ? DIAGNOSE_MINUTES : GAP_MINUTES,
       status: 'pending',
       sortOrder: tasks.length
     })

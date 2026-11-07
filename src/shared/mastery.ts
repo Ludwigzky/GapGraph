@@ -1,10 +1,13 @@
-import type { ErrorReason, Mastery } from './types'
+import type { ErrorReason, Mastery, SelfLevel } from './types'
 
 export const DAY = 86_400_000
 
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
 
+export const SCHEMA_VERSION = 2
+
 export function freshMastery(K = 0): Mastery {
+  const selfLevel: SelfLevel = K >= 1 ? 'basic' : K >= 0.5 ? 'weak' : 'none'
   return {
     K,
     A: 0.3,
@@ -15,7 +18,11 @@ export function freshMastery(K = 0): Mastery {
     Aw: 0,
     misconception: 0,
     lastAt: null,
-    evidence: K > 0 ? 'self' : 'none'
+    evidence: K > 0 ? 'self' : 'none',
+    schemaVersion: SCHEMA_VERSION,
+    selfLevel,
+    selfAt: null,
+    abilityFrom: 'v2'
   }
 }
 
@@ -28,7 +35,15 @@ export function freshMastery(K = 0): Mastery {
  */
 export function evidenceOf(m: Mastery): 'none' | 'self' | 'tested' {
   if (m.n > 0) return 'tested'
-  if (m.K > 0) return 'self'
+  if (m.K > 0 || (m.selfLevel && m.selfLevel !== 'none' && m.selfLevel !== 'unknown')) return 'self'
+  return 'none'
+}
+
+/** 自评档位（读的时候兼容老数据：没有 selfLevel 就看 K） */
+export function selfLevelOf(m: Mastery): SelfLevel {
+  if (m.selfLevel) return m.selfLevel
+  if (m.K >= 1) return 'basic'
+  if (m.K >= 0.5) return 'weak'
   return 'none'
 }
 
@@ -49,9 +64,10 @@ export function retention(m: Mastery, now: number): number {
 }
 
 /**
- * 还没做过题时，掌握度直接等于自评档位：
- * 没学过 0（灰）/ 学过不会 0.15（红）/ 会 0.3（橙，待验证）
- * "会"不给到黄绿：绿色应当意味着"做过题证明过"，而不是"自己说会"。
+ * 自评的"展示参考值"。
+ *
+ * 注意：这**不是**能力估计，只用来在还没有任何答题证据时给个初始印象。
+ * v2 起它不参与 masteryScore，也不再进优先级公式。
  */
 export function selfPrior(K: number): number {
   if (K >= 1) return 0.3
@@ -60,18 +76,26 @@ export function selfPrior(K: number): number {
 }
 
 /**
- * 综合掌握度 = 覆盖 × 能力 × 记忆折扣。
+ * 综合掌握度 = 纯能力估计。
  *
- * 关键：记忆保持 R 是"能力"的衰减系数，不是独立加分项。
- * 早先写成 K×(0.6A + 0.4R) 时，刚做完题 R≈1 就白送 0.4，
- * 结果是"连错 5 题正确率 0%，掌握分仍然 0.38 橙色"——全错就该是红的。
+ * v2 起做了两处减法：
+ *   ① 不再乘 K —— 自评是主观报告，不该给能力封顶，也不该在"自评没学过"时把能力压成 0
+ *   ② 不再乘 R —— 久没复习是"该复习了"，不是"变笨了"；
+ *      记忆衰减只通过 isDue/复习调度起作用
+ *
+ * 所以：只有答题证据能改变这个数；没有证据时返回自评参考值（仅用于界面兜底）。
  */
 export function masteryScore(m: Mastery, now: number): number {
+  void now
   if (m.n === 0) return selfPrior(m.K)
-  const R = retention(m, now)
-  const base = m.K * m.A * (0.6 + 0.4 * R)
-  return clamp01(m.misconception ? base * 0.85 : base)
-}export function confidence(n: number): number {
+  return clamp01(m.misconception ? m.A * 0.85 : m.A)
+}
+
+/**
+ * 证据可信度：只反映"证据够不够、新不新鲜"，与能力高低无关。
+ * 0 = 一点证据都没有，1 = 证据非常充分。
+ */
+export function confidence(n: number): number {
   return 1 - Math.exp(-n / 4)
 }
 
@@ -106,12 +130,22 @@ export function evidConfidence(m: Mastery, now: number): number {
   return confidence(evidenceW(m, now))
 }
 
-export function effective(m: Mastery, now: number): { M: number; conf: number; eff: number } {
+/**
+ * 对外统一的四元组。
+ *
+ * v2 的重要变化：`eff` 不再向 0.3 收缩。
+ * 旧公式 `conf*M + (1−conf)*0.3` 会把"证据少"直接翻译成"大概 0.3 分"，
+ * 再拿这个假分数去排缺口——于是**没测过的节点被当成薄弱项排在前面**。
+ * 现在 `known` 明确表示"有没有证据"，排序方必须自己决定怎么处理未知，
+ * 不能再靠一个捏造的数字蒙混过去。
+ */
+export function effective(
+  m: Mastery,
+  now: number
+): { M: number; conf: number; eff: number; known: boolean; retention: number } {
   const M = masteryScore(m, now)
-  // 置信度改用"有效证据量"：久不练习会让它自己回落，
-  // 而不是像以前那样做满 20 题就永久 0.99。
   const conf = evidConfidence(m, now)
-  return { M, conf, eff: conf * M + (1 - conf) * 0.3 }
+  return { M, conf, eff: M, known: m.n > 0, retention: retention(m, now) }
 }
 
 export interface AttemptEffect {
@@ -194,7 +228,8 @@ export function applyAttempt(m: Mastery, e: AttemptEffect): Mastery {
   const s = e.correct ? m.s * (1 + 1.2 * (1 - R) * wDiff) : slip ? Math.max(1, m.s * 0.85) : Math.max(1, m.s * 0.45)
   const misconception: 0 | 1 = !e.correct && e.sure && !slip ? 1 : m.misconception
 
-  // 覆盖度不是一次性标签：做对了就该往上抬，否则自评"学过不会"的考点永远封顶在 0.5
+  // 旧字段 K 保持写回（历史兼容），但 v2 起不再参与任何计算。
+  // 能力能不能抬，只看 A 有没有真的被证据推上去，不看"自评说过会"。
   let K = Math.max(m.K, 0.5)
   if (e.correct && A >= 0.6) {
     K = Math.min(1, Math.round((K + 0.2) * 100) / 100)
@@ -212,7 +247,22 @@ export function applyAttempt(m: Mastery, e: AttemptEffect): Mastery {
     misconception,
     lastAt: e.now,
     // 只要走过一次有效作答（蒙对被跳过，不会走到这里），状态就从"自评"升级为"有证据"
-    evidence: 'tested'
+    evidence: 'tested',
+    schemaVersion: SCHEMA_VERSION,
+    abilityFrom: 'v2'
+  }
+}
+
+/** 设置自评档位。自评只影响展示与建议，**不改能力估计** */
+export function setSelfLevel(m: Mastery, level: SelfLevel, now: number): Mastery {
+  const K = level === 'basic' ? 1 : level === 'weak' ? 0.5 : 0
+  return {
+    ...m,
+    K, // 同步旧字段，老界面/老逻辑读 K 时不会错乱
+    selfLevel: level,
+    selfAt: now,
+    evidence: m.n > 0 ? 'tested' : level === 'none' ? 'none' : 'self',
+    schemaVersion: SCHEMA_VERSION
   }
 }
 
@@ -243,4 +293,41 @@ export function band(m: Mastery, now: number): Band {
   if (M < 0.4) return 'orange'
   if (M < 0.6) return 'yellow'
   return 'green'
+}
+
+/* ---------------- v1 → v2 迁移 ---------------- */
+
+/**
+ * 把旧 Mastery 迁移到 v2。
+ *
+ * 原则（对应任务书 B6）：
+ * - 旧的 K 混了两种来源（自评 + 答对自动抬），**不能**直接当纯自评。
+ *   但 `n === 0` 时 K 只可能来自自评（applyAttempt 一定会把 n 加一），
+ *   这部分可以可靠还原成 selfLevel；
+ *   n > 0 的一律标 'unknown'，宁可显示"未知"，也不编造用户的态度。
+ * - 旧 A 是当时模型的估计，保留并标记 abilityFrom='v1'，
+ *   不重算、不覆盖，等下一道有效答题再升级为 v2。
+ * - s / lastAt / n / nok / W / Aw / misconception 原样保留。
+ *
+ * 幂等：已经 schemaVersion=2 的直接返回，重复执行不会改任何数。
+ */
+export function migrateMastery(m: Mastery): Mastery {
+  if (m.schemaVersion === SCHEMA_VERSION) return m
+
+  const n = Math.max(0, m.n ?? 0)
+  let selfLevel: SelfLevel
+  if (n > 0) selfLevel = 'unknown'
+  else if ((m.K ?? 0) >= 1) selfLevel = 'basic'
+  else if ((m.K ?? 0) >= 0.5) selfLevel = 'weak'
+  else selfLevel = 'none'
+
+  return {
+    ...m,
+    schemaVersion: SCHEMA_VERSION,
+    selfLevel,
+    // 迁移来的自评没有可信时间戳，留空而不是伪造一个
+    selfAt: null,
+    abilityFrom: m.n > 0 ? 'v1' : 'v2',
+    evidence: n > 0 ? 'tested' : selfLevel === 'none' ? 'none' : 'self'
+  }
 }

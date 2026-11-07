@@ -6,7 +6,7 @@
 import packJson from '../../../resources/packs/gaokao-math-function.json'
 import questionsJson from '../../../resources/questions/gaokao-math-function.json'
 import type { AppState, LoadResult, Mastery, Pack, Question, SubmitPayload, SubmitResult, Task } from '../../shared/types'
-import { applyAttempt, band, effective, freshMastery, masteryScore } from '../../shared/mastery'
+import { applyAttempt, band, effective, freshMastery, masteryScore, migrateMastery, setSelfLevel } from '../../shared/mastery'
 import { blankMastery, buildToday, coverage, daysUntil } from '../../main/domain/queue'
 import { isCorrect } from '../../main/domain/grading'
 import { buildAttemptRecord } from '../../main/domain/attempt-log'
@@ -66,6 +66,9 @@ function read(): AppState {
         m.Aw = (m.nok ?? 0) * 1
       }
     }
+    // v1 → v2：把自评/能力/保持/可信度拆开。幂等，重复执行不改任何数。
+    for (const id of Object.keys(s.mastery)) s.mastery[id] = migrateMastery(s.mastery[id])
+    s.schemaVersion = 2
     return s
   } catch {
     storageOk = false
@@ -225,10 +228,9 @@ export function createLocalApi() {
     async rate(nodeId: string, level: 0 | 1 | 2) {
       const state = read()
       const m = state.mastery[nodeId] ?? freshMastery(0)
-      const K = level === 0 ? 0 : level === 1 ? 0.5 : 1
-      // 自评只改覆盖度，不改"有没有被答题验证过"这件事
-      const evidence = m.n > 0 ? 'tested' : K > 0 ? 'self' : 'none'
-      state.mastery[nodeId] = { ...m, K, A: level === 2 ? 0.6 : m.A, evidence }
+      // v2：自评只是主观报告，不再顺手把能力改成 0.6
+      const levelName = level === 0 ? 'none' : level === 1 ? 'weak' : 'basic'
+      state.mastery[nodeId] = setSelfLevel(m, levelName, Date.now())
       write(state)
       const now = Date.now()
       return { state, today: ensureToday(state, now), overview: overviewOf(state, now) }

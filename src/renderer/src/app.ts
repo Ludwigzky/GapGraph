@@ -131,7 +131,12 @@ const BAND_COLOR: Record<string, string> = {
   unmeasured: 'var(--c0)'
 }
 
-const KIND_LABEL: Record<string, string> = { review: '到期复习', gap: '缺口补救', new: '新学' }
+const KIND_LABEL: Record<string, string> = {
+  review: '到期复习',
+  gap: '缺口补救',
+  diagnose: '先摸底',
+  new: '新学'
+}
 const BAND_NAME: Record<string, string> = {
   red: '红',
   orange: '橙',

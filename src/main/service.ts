@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AppState, LoadResult, Pack, Question, SubmitPayload, SubmitResult, Task } from '../shared/types'
-import { DAY, applyAttempt, band, effective, freshMastery, masteryScore } from './domain/mastery'
+import { DAY, applyAttempt, band, effective, freshMastery, masteryScore, migrateMastery, setSelfLevel } from './domain/mastery'
 import { buildToday, blankMastery, coverage, daysUntil } from './domain/queue'
 import { isCorrect } from './domain/grading'
 import { buildAttemptRecord } from './domain/attempt-log'
@@ -69,6 +69,9 @@ export class Service {
       for (const n of this.pack.nodes) {
         if (!s.mastery[n.id]) s.mastery[n.id] = freshMastery(n.kind === 'root' ? 1 : 0)
       }
+      // v1 → v2 迁移：把自评/能力/保持/可信度拆开。幂等，重复执行不改任何数。
+      for (const id of Object.keys(s.mastery)) s.mastery[id] = migrateMastery(s.mastery[id])
+      s.schemaVersion = 2
       return s
     } catch {
       return this.defaultState()
@@ -223,10 +226,9 @@ export class Service {
   /** 三档自评：没学过 0 / 学过不会 0.5 / 会 1（"会"也只给 0.6 分，余量留给证据） */
   rate(nodeId: string, level: 0 | 1 | 2): AppState {
     const m = this.state.mastery[nodeId] ?? freshMastery(0)
-    const K = level === 0 ? 0 : level === 1 ? 0.5 : 1
-    // 自评只改覆盖度，不改"有没有被答题验证过"这件事
-    const evidence = m.n > 0 ? 'tested' : K > 0 ? 'self' : 'none'
-    this.state.mastery[nodeId] = { ...m, K, A: level === 2 ? 0.6 : m.A, evidence }
+    // v2：自评只是主观报告，**不再**顺手把能力改成 0.6
+    const levelName = level === 0 ? 'none' : level === 1 ? 'weak' : 'basic'
+    this.state.mastery[nodeId] = setSelfLevel(m, levelName, Date.now())
     this.save()
     return this.state
   }
